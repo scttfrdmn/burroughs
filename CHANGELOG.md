@@ -119,8 +119,11 @@ says what it now requires and what it gives up.
     - an append is not atomic against another process's;
     - on Windows, `metadata-hash` hashes the type, size and modification time, and is not an identity. There, a file
       opened without `write` cannot have its times set, and a directory's `sync` does nothing.
-  - **Not yet reached:** a Go program's `os.Readlink`, `os.Symlink`, `os.Link`, `os.Truncate`, `os.Chtimes` and
-    `os.SameFile`, until the Phase 4 fork binds them (F11c).
+  - **A Go program** reaches `os.Readlink`, `os.Symlink`, `os.Link`, `os.Truncate` and `os.Chtimes` through the Phase 4
+    fork's `os` binding ([#1377](https://github.com/scttfrdmn/burroughs/issues/1377)). Its witness's mutations were read
+    on wasmtime 49.0.3 only, before this change served them, and are not yet read on Burroughs. `os.SameFile` is not
+    reached: it compares device and inode numbers, which the interface does not expose, so it reports any two files
+    the same.
 
 - **A component creates, removes and renames beneath a directory it is granted: `wasi:filesystem@0.3`'s four
   mutations** ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1c of the v0.16.0 plan
@@ -149,7 +152,9 @@ says what it now requires and what it gives up.
       it was opened, where wasmtime follows its fds;
     - a directory opened without `mutate-directory` is `read-only` where wasmtime mutates through it;
     - a directory renamed onto an empty one is `exist` where POSIX replaces it, as `os.Rename` refuses it.
-  - **Not yet reached:** a Go program's `os.Mkdir`, `os.Remove` and `os.Rename`, until the Phase 4 fork binds them (F11c).
+  - **A Go program** reaches `os.Mkdir`, `os.Remove`, `os.RemoveAll` and `os.Rename` through the Phase 4 fork's `os`
+    binding ([#1377](https://github.com/scttfrdmn/burroughs/issues/1377)). Its witness's mutations were read on wasmtime
+    49.0.3 only, before this change served them, and are not yet read on Burroughs.
 
 - **A component lists a directory it is granted: `wasi:filesystem@0.3`'s `descriptor.read-directory`**
   ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1b of the v0.16.0 plan
@@ -173,7 +178,9 @@ says what it now requires and what it gives up.
     `fs-readdir-run.wasm` exits with its reading through `ComponentConfig.Run` and `burroughs run --dir`/`--scratch`
     (`fs-readdir-run.reading`). `TestADirectoryReadIsLoweredWithNoEngineLockHeld` stands inside each realloc call and
     finds no engine lock held there.
-  - **Not yet reached:** a Go program's `os.ReadDir`, until the Phase 4 fork binds it (F11b).
+  - **A Go program's `os.ReadDir`, `f.ReadDir` and `fs.WalkDir`** reach it through the Phase 4 fork's `os` binding
+    ([#1377](https://github.com/scttfrdmn/burroughs/issues/1377)). That witness's listings print stock go1.26.9's bytes on
+    Burroughs, 10 of 10.
 
 - **`wasi:http@0.3`'s outgoing half for components: a component builds requests and sends them over Go's
   `net/http`, behind a grant denied at the call** ([#1383](https://github.com/scttfrdmn/burroughs/issues/1383), E2-out
@@ -225,8 +232,11 @@ says what it now requires and what it gives up.
     read-only rows the WIT's text, since wasmtime's CLI has no read-only grant (`fs-descriptor.reading`), with
     `gate:cm-threads` off and on. `fs-run.wasm` exits with wasmtime's reading through `ComponentConfig.Run` and
     `burroughs run --scratch`, and with the WIT's through `--dir` (`fs-run.reading`).
-  - **Not yet reached:** WASI 0.2's `wasi:filesystem` (its `get-directories` still answers an empty list), and a Go
-    program, until the Phase 4 fork binds its `os` package to this interface (F11).
+  - **A Go program** reaches it through the Phase 4 fork's `os` binding
+    ([#1377](https://github.com/scttfrdmn/burroughs/issues/1377)). Its witness creates, writes, seeks, reads back and
+    stats files through relative and absolute paths, and it prints stock go1.26.9's bytes on Burroughs 10 of 10, under
+    `--scratch` and under `--dir`'s refusals.
+  - **Not yet reached:** WASI 0.2's `wasi:filesystem`, whose `get-directories` still answers an empty list.
 
 ### Changed
 
