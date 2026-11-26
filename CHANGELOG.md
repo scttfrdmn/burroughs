@@ -83,6 +83,79 @@ says what it now requires and what it gives up.
   - **Not yet reached:** `task.cancel` still resolves a caller at the task's exit, where the pin resolves at the call.
     Only a top-level own argument crosses, and no borrow, stream or future.
 
+- **The rest of `wasi:filesystem@0.3`'s `descriptor`: links, sizes, times, sync, advice, metadata hashes, identity and
+  appends** ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1d of the v0.16.0 plan
+  [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0138). No public API changes. Every method of
+  `descriptor` that wasip3 0.8.0's WIT declares is now served, and none meets the refusing stub.
+  - **`readlink-at`, `symlink-at` and `link-at`:**
+    - `readlink-at`'s string is lowered through the caller's realloc, on the caller's goroutine, with no engine lock
+      held. Absolute content is `not-permitted`, as the WIT says;
+    - `symlink-at` refuses an absolute target, and makes a relative one that climbs out, as wasmtime does, since
+      following it is refused;
+    - `link-at` links a symlink as itself. It refuses `symlink-follow` with `invalid`, as wasmtime does, and its second
+      descriptor resolves as `rename-at`'s does.
+  - **`set-size`, `set-times` and `set-times-at`:**
+    - times are nanosecond-precise. A file's are set through its fd, by `utimensat` on `/dev/fd/N` on darwin and
+      `/proc/self/fd/N` on linux, and by `SetFileTime` on Windows;
+    - an instant is normalised and clamped to 1677–2262, as darwin clamps;
+    - a file's times need the directory it was opened from to have had `mutate-directory`, so a read-only grant's
+      files keep theirs.
+  - **`sync`, `sync-data` and `advise`:**
+    - `sync` and `sync-data` fsync. A file without `write` is ok with no effect, as the WIT says;
+    - `advise` is ok and changes nothing on a file, and an advice past `no-reuse` traps at the lift.
+  - **`metadata-hash`, `metadata-hash-at` and `is-same-object`:**
+    - `metadata-hash` and `metadata-hash-at` are SHA-256 of the device and inode numbers, wasmtime's inputs, so a write
+      does not change them;
+    - `is-same-object` is `os.SameFile`.
+  - **`append-via-stream`** is `write-via-stream`'s writer, each write at the file's size, under a per-file lock.
+  - **Witnesses:** 36 of `fs-rest.wasm`'s 41 rows match wasmtime 49.0.3's readings, 10 of 10 each, the trap included,
+    and its read-only rows match the WIT's text (`fs-rest.reading`). Every row was run with `gate:cm-threads` off and
+    on, plain and under `-race`, with the host's trees and `outside/`'s times read after each.
+  - **Named departures from wasmtime:**
+    - a link across two grants is `cross-device`;
+    - a directory opened without `mutate-directory` refuses each mutation;
+    - a symlink's own times are `unsupported`, since `os.Root` has no `Lchtimes`.
+  - **Named limits:**
+    - an append is not atomic against another process's;
+    - on Windows, `metadata-hash` hashes the type, size and modification time, and is not an identity. There, a file
+      opened without `write` cannot have its times set, and a directory's `sync` does nothing.
+  - **A Go program** reaches `os.Readlink`, `os.Symlink`, `os.Link`, `os.Truncate` and `os.Chtimes` through the Phase 4
+    fork's `os` binding ([#1377](https://github.com/scttfrdmn/burroughs/issues/1377)). Its witness's mutations were read
+    on wasmtime 49.0.3 only, before this change served them, and are not yet read on Burroughs. `os.SameFile` is not
+    reached: it compares device and inode numbers, which the interface does not expose, so it reports any two files
+    the same.
+
+- **A component creates, removes and renames beneath a directory it is granted: `wasi:filesystem@0.3`'s four
+  mutations** ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1c of the v0.16.0 plan
+  [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0138). No public API changes: the grant is ADR 0133's
+  `ComponentConfig.Preopens` and `burroughs run --dir`/`--scratch`.
+  - **What is served:** `descriptor`'s `create-directory-at`, `unlink-file-at`, `remove-directory-at` and `rename-at`,
+    each resolved inline and confined by its descriptor's `os.Root`. A descriptor without `mutate-directory` refuses
+    each with `read-only`, before anything is resolved, and that includes a directory opened without it. An empty path
+    is `no-entry`.
+  - **Kinds are asked about first:**
+    - `unlink-file-at` of a directory is `not-permitted` on every platform, since `Root.Remove` would remove an empty
+      one;
+    - `remove-directory-at` of anything but a directory is `not-directory`;
+    - `rename-at` onto an existing directory is answered as POSIX's rename answers it: `is-directory`, `not-empty`, or
+      ok onto itself.
+  - **`rename-at`'s second descriptor:**
+    - the same descriptor renames through its own root;
+    - two grants are `cross-device`;
+    - two descriptors of one grant rename through the grant's root at each one's recorded path. Each path is resolved
+      on its own descriptor's root first, and each recorded path must still name its directory.
+  - **Witnesses:** 19 of `fs-mutate.wasm`'s 25 rows match wasmtime 49.0.3's readings, 10 of 10 each, and its read-only
+    row matches the WIT's text (`fs-mutate.reading`). Every row was run with `gate:cm-threads` off and on, plain and
+    under `-race`, and after each the host's trees show what the row wrote and that nothing escaped the grant.
+  - **Named departures from wasmtime, each a row of its own:**
+    - a rename across two grants is `cross-device`, and so is one into a descriptor whose directory was renamed after
+      it was opened, where wasmtime follows its fds;
+    - a directory opened without `mutate-directory` is `read-only` where wasmtime mutates through it;
+    - a directory renamed onto an empty one is `exist` where POSIX replaces it, as `os.Rename` refuses it.
+  - **A Go program** reaches `os.Mkdir`, `os.Remove`, `os.RemoveAll` and `os.Rename` through the Phase 4 fork's `os`
+    binding ([#1377](https://github.com/scttfrdmn/burroughs/issues/1377)). Its witness's mutations were read on wasmtime
+    49.0.3 only, before this change served them, and are not yet read on Burroughs.
+
 - **A component lists a directory it is granted: `wasi:filesystem@0.3`'s `descriptor.read-directory`**
   ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1b of the v0.16.0 plan
   [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0134). No public API changes: the grant is ADR 0133's
@@ -105,7 +178,9 @@ says what it now requires and what it gives up.
     `fs-readdir-run.wasm` exits with its reading through `ComponentConfig.Run` and `burroughs run --dir`/`--scratch`
     (`fs-readdir-run.reading`). `TestADirectoryReadIsLoweredWithNoEngineLockHeld` stands inside each realloc call and
     finds no engine lock held there.
-  - **Not yet reached:** a Go program's `os.ReadDir`, until the Phase 4 fork binds it (F11b).
+  - **A Go program's `os.ReadDir`, `f.ReadDir` and `fs.WalkDir`** reach it through the Phase 4 fork's `os` binding
+    ([#1377](https://github.com/scttfrdmn/burroughs/issues/1377)). That witness's listings print stock go1.26.9's bytes on
+    Burroughs, 10 of 10.
 
 - **`wasi:http@0.3`'s outgoing half for components: a component builds requests and sends them over Go's
   `net/http`, behind a grant denied at the call** ([#1383](https://github.com/scttfrdmn/burroughs/issues/1383), E2-out
@@ -151,14 +226,17 @@ says what it now requires and what it gives up.
     `open-at`, `stat`, `stat-at`, `get-flags`, `get-type`, `read-via-stream` and `write-via-stream`. Every grant,
     read-only ones too, resolves paths through an `os.Root` of its own, so `..`, a symlink pointing out, or an absolute
     path fails `not-permitted`, as the WIT says. A read-only grant refuses a write, a create or a truncate with
-    `read-only`. The async methods resolve inline, as wasmtime 49.0.3's do. `read-directory` came in E1b (above).
-    Every other `descriptor` method is still refused by name at its call: the mutations are E1c's.
+    `read-only`. The async methods resolve inline, as wasmtime 49.0.3's do. `read-directory` came in E1b, the
+    mutations in E1c, and the rest in E1d (all above).
   - **Witnesses:** `fs-descriptor.wasm`'s twenty rows match wasmtime 49.0.3's readings, 10 of 10 each, and its two
     read-only rows the WIT's text, since wasmtime's CLI has no read-only grant (`fs-descriptor.reading`), with
     `gate:cm-threads` off and on. `fs-run.wasm` exits with wasmtime's reading through `ComponentConfig.Run` and
     `burroughs run --scratch`, and with the WIT's through `--dir` (`fs-run.reading`).
-  - **Not yet reached:** WASI 0.2's `wasi:filesystem` (its `get-directories` still answers an empty list), and a Go
-    program, until the Phase 4 fork binds its `os` package to this interface (F11).
+  - **A Go program** reaches it through the Phase 4 fork's `os` binding
+    ([#1377](https://github.com/scttfrdmn/burroughs/issues/1377)). Its witness creates, writes, seeks, reads back and
+    stats files through relative and absolute paths, and it prints stock go1.26.9's bytes on Burroughs 10 of 10, under
+    `--scratch` and under `--dir`'s refusals.
+  - **Not yet reached:** WASI 0.2's `wasi:filesystem`, whose `get-directories` still answers an empty list.
 
 ### Changed
 

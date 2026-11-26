@@ -1,0 +1,146 @@
+# Committed readings for fs-rest.wasm: wasi:filesystem@0.3's readlink-at, symlink-at, link-at, set-size, set-times,
+# set-times-at, sync, sync-data, advise, metadata-hash, metadata-hash-at, is-same-object and append-via-stream at the ABI
+# (#1374 E1d, ADR 0133, ADR 0138). Default path for each Go row: gate:async on, gate:cm-threads both off and on.
+# Built:       wasm-tools parse fs-rest.wat -o fs-rest.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y -W component-model-more-async-builtins=y \
+#                -S p3=y --dir <tree>::/ --dir <tree2>::/b --invoke 'run(<row>)' fs-rest.wasm
+# Tree:        made fresh before every run, three siblings: tree/ holds hello.txt "hello world", w.txt "0123456789",
+#              sub/inner.txt "inner", in-link -> hello.txt, dir-link -> sub, up-link -> .., rel-out -> ../outside, and
+#              out-link -> the absolute path of outside/; tree2/ holds other.txt "other"; outside/ holds victim.txt "v".
+#              No row reads a directory, so host directory order is never read.
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical. Taken
+#              2026-11-26, before the engine code.
+#
+# Each line is `<row>: <reading>`, and the test reads them by row. The row's number is its line's position, from 0,
+# counting row lines only. A reading of `trap` is a run that traps, wasmtime's message given after it.
+readlink: 1952975104
+readlink-kinds: 167772928
+readlink-errors: 2660469662
+symlink: 151717120
+symlink-errors: 2476639902
+symlink-escape-target: 10355712
+link: 184681728
+link-errors: 2342422163
+link-escapes: 2661195422
+link-two: 83886080
+#
+# Burroughs', not wasmtime's, by ADR 0138's two-descriptor rule: a root cannot span two grants, so a link across them
+# is cross-device. wasmtime 49.0.3 links with linkat over two fds, on one filesystem here, and reads 83887360
+# (0x05000500): ok; hard a regular-file in the second grant; ok; x a regular-file in the first.
+link-cross-grant: 2476970915
+#
+link-symlink: 150995968
+set-size: 335545344
+set-size-errors: 2332787339
+set-times: 28380928
+set-times-partial: 251658240
+set-times-kinds: 196608
+set-times-at: 251658240
+set-times-at-errors: 2661195411
+timestamps: 16777216
+sync: 0
+sync-more: 0
+advise: 2181038080
+advise-more: 0
+mhash-same: 16843009
+mhash-links: 16843009
+mhash-change: 15
+mhash-errors: 2533400211
+same-object: 257
+same-object-more: 16842753
+append: 251658288
+append-content: 1145258561
+append-errors: 2181136897
+base-file: 2543294359
+#
+# Burroughs', by ADR 0133's child flags read through the WIT's mutate-directory text (ADR 0138): a child opened without
+# mutate-directory refuses each with read-only. wasmtime 49.0.3 does not consult a child's flags, and reads 0: l and
+# inner-hard created, and both times set.
+child-read: 2694881440
+#
+# The next row comes from the WIT's text, not from wasmtime: wasmtime 49.0.3's `--dir` always grants
+# read|mutate-directory, so its CLI has no read-only grant (ADR 0133). Burroughs runs it on a read-only preopen and the
+# test asserts this value. On wasmtime's grant it reads 0: l and hard created, and both times set.
+read-only: 2694881440
+#
+# Read on a read-only preopen too, and equal to wasmtime's reading on its grant, since none of the four writes.
+read-only-reads: 65536
+#
+sync-lower: 67840
+advise-bad: trap (wasmtime: "unexpected discriminant: 6")
+#
+# Burroughs', by ADR 0138: os.Root has no Lchtimes, so set-times-at without symlink-follow on a symlink is unsupported.
+# wasmtime 49.0.3 sets the link's own times and reads 67305472 (0x04030000): ok; ok; the link's modification 1.7e9 and
+# hello.txt's still 1.6e9; in-link a symbolic-link.
+set-times-at-link: 67279360
+#
+# From the WIT's text, on a read-only preopen, as read-only is: a file opened from a read-only grant cannot have its
+# times set, by ADR 0138's provenance rule. On wasmtime's grant it reads 2190147584 (0x828b0000): ok; the times set;
+# set-size invalid; the append's future bad-descriptor.
+read-only-file: 2190188544
+#
+# Meaning: four bytes, byte 0 the low one. An operation's byte is 0 for ok and 0x80 | its error-code case for an error
+# (0x82 bad-descriptor, 0x86 exist, 0x8b invalid, 0x93 no-entry, 0x97 not-directory, 0x9a unsupported, 0x9e
+# not-permitted, 0xa0 read-only, 0xa3 cross-device). A kind byte is stat-at's type when ok (2 directory, 4
+# symbolic-link, 5 regular-file). A write's payload is progress << 4 | COMPLETED (0) or DROPPED (1).
+#   readlink              0x74680900: readlink-at in-link ok; 9 bytes; first "h", last "t" (hello.txt).
+#   readlink-kinds        0x0a000300: dir-link ok, 3 bytes (sub); rel-out ok, 10 bytes (../outside): relative content
+#                         is returned even when it climbs out.
+#   readlink-errors       0x9e938b9e: out-link (absolute content) not-permitted; hello.txt invalid; missing no-entry;
+#                         ../x not-permitted.
+#   symlink               0x090b0500: newlink -> hello.txt ok; followed, a regular-file of 11 bytes; its content 9 bytes.
+#   symlink-errors        0x939e869e: target /x not-permitted; at in-link exist; at ../x not-permitted; at missing/x
+#                         no-entry.
+#   symlink-escape-target 0x009e0400: esc -> ../outside ok; esc a symbolic-link; esc/victim.txt followed
+#                         not-permitted; readlink-at esc ok.
+#   link                  0x0b020500: hard -> hello.txt ok; a regular-file; link-count 2; 11 bytes.
+#   link-errors           0x8b9e8693: missing no-entry; at w.txt exist; sub (a directory) not-permitted; in-link with
+#                         symlink-follow invalid.
+#   link-escapes          0x9e9e9e9e: each not-permitted; outside/ unchanged.
+#   link-two              0x05000000: sub opened ok; hello.txt into sub's hard ok; sub's inner.txt to the grant's
+#                         inner-hard ok; sub/hard a regular-file.
+#   link-cross-grant      0x93a393a3: cross-device; no hard in the second grant; cross-device; no x in the first.
+#   link-symlink          0x09000400: in-link unfollowed to lhard ok; lhard a symbolic-link (the link itself); its
+#                         content 9 bytes.
+#   set-size              0x14000400: set-size 4 ok, size 4; set-size 20 ok, size 20.
+#   set-size-errors       0x8b0b828b: hello.txt opened read, invalid; the grant bad-descriptor; hello.txt still 11
+#                         bytes; 2^64-1 invalid.
+#   set-times             0x01b10f00: ok; all four of access and modification seconds and nanoseconds as set
+#                         (nanosecond precision); the modification nanoseconds' low byte 0xb1 (987654321); access some.
+#   set-times-partial     0x0f000000: ok, ok, ok; access kept under no-change, modification set; access now, past 1.7e9;
+#                         modification kept.
+#   set-times-kinds       0x00030000: the grant's times set; hello.txt opened read has its times set.
+#   set-times-at          0x0f000000: ok; through in-link followed ok; hello.txt unfollowed (a regular file) ok; each
+#                         time as set, the access nanoseconds 5 included.
+#   set-times-at-errors   0x9e9e9e93: missing no-entry; the three escapes not-permitted; outside/victim.txt's times
+#                         unchanged.
+#   timestamps            0x01000000: 10^9 nanoseconds ok (carried into the seconds); 2^62 seconds ok (clamped); -1
+#                         seconds ok, and read back as -1.
+#   sync                  0x00000000: w.txt sync and sync-data ok; hello.txt opened read, sync ok; the grant, sync ok.
+#   sync-more             0x00000000: the grant's sync-data, hello.txt's sync-data, and sub's sync and sync-data ok.
+#   advise                0x82000000: normal, sequential and dont-need on hello.txt ok; the grant bad-descriptor.
+#   advise-more           0x00000000: random, will-need, no-reuse and past the end ok.
+#   mhash-same            0x01010101: two opens of hello.txt hash alike; metadata-hash-at hello.txt alike; w.txt
+#                         differs; is-same-object true.
+#   mhash-links           0x01010101: a hard link hashes alike; in-link followed alike; in-link unfollowed differs;
+#                         is-same-object of the link and the file true.
+#   mhash-change          0x0000000f: unchanged by a write, by set-times and by set-size; upper differs from lower.
+#   mhash-errors          0x97009e93: missing no-entry; ../x not-permitted; the grant's ok; a file base not-directory.
+#   same-object           0x00000101: the grant and itself true; the grant and "." true; the grant and sub false;
+#                         hello.txt and w.txt false.
+#   same-object-more      0x01010001: a second call's grant true; the second preopen false; hello.txt through in-link
+#                         true; sub through dir-link true.
+#   append                0x0f000030: "ABC" COMPLETED with 3, its future ok; "DE"'s future ok; 15 bytes read back.
+#   append-content        0x44434241: bytes 10 to 13 read back are "ABCD".
+#   append-errors         0x82018201: hello.txt opened read, DROPPED with 0 and bad-descriptor; the grant the same.
+#   base-file             0x97979797: hello.txt as the base of all four: not-directory each.
+#   child-read            0xa0a0a0a0: each read-only, and sub is unchanged.
+#   read-only             0xa0a0a0a0: on a read-only grant each read-only, and the tree is unchanged.
+#   read-only-reads       0x00010000: readlink-at ok; metadata-hash ok; is-same-object true; sync ok.
+#   sync-lower            0x00010900: readlink-at through its sync lower ok, 9 bytes; is-same-object through its
+#                         sync lower true.
+#   advise-bad            a trap at the lift: no advice case 6.
+#   set-times-at-link     0x04029a00: ok; in-link unfollowed unsupported; the link's times unset and hello.txt's kept;
+#                         in-link a symbolic-link.
+#   read-only-file        0x828ba000: hello.txt opened read ok; its set-times read-only; set-size invalid; the
+#                         append's future bad-descriptor.

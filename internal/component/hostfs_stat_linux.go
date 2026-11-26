@@ -18,5 +18,16 @@ func statExtra(fi os.FileInfo) (atime, ctime time.Time, nlink uint64, ok bool) {
 	return time.Unix(st.Atim.Unix()), time.Unix(st.Ctim.Unix()), widenCount(st.Nlink), true
 }
 
-// widenCount widens a link count of the architecture's width, which is 32 bits on some linux ports and 64 on others.
+// fileIdentity is the device and inode numbers of linux's stat record, metadata-hash's inputs (ADR 0138). ok is false
+// when the record is not linux's.
+func fileIdentity(fi os.FileInfo) (dev, ino uint64, ok bool) {
+	st, isStat := fi.Sys().(*syscall.Stat_t)
+	if !isStat {
+		return 0, 0, false
+	}
+	return widenCount(st.Dev), widenCount(st.Ino), true
+}
+
+// widenCount widens a link count, a device number or an inode number of the architecture's width, which is 32 bits on
+// some linux ports and 64 on others.
 func widenCount[T ~uint32 | ~uint64](n T) uint64 { return uint64(n) }

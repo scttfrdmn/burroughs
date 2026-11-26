@@ -14,3 +14,7 @@ import (
 func statExtra(os.FileInfo) (atime, ctime time.Time, nlink uint64, ok bool) {
 	return time.Time{}, time.Time{}, 0, false
 }
+
+// fileIdentity is ADR 0138's fallback where Go exposes no device or inode number: none, so metadata-hash hashes the
+// type, size and modification time instead.
+func fileIdentity(os.FileInfo) (dev, ino uint64, ok bool) { return 0, 0, false }
