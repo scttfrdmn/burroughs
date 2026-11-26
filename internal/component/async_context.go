@@ -40,7 +40,8 @@ import (
 // read 0). Only a caller with no Thread record (a core-level call bypassing the component) falls back to
 // `h.lift`, which is all it ever had.
 //
-// **A caller inside a `cabi_realloc` has storage of its own, whatever lift it is nested in** (#1385, ADR 0137): nil,
+// **A caller inside a `cabi_realloc` has storage of its own, whatever lift it is nested in** (grave #1400; #1385, ADR
+// 0137): nil,
 // so the stack's slots, which `CanonCaller.Realloc` zeroes and restores around the call (ADR 0119, grave #1260) and
 // a lift's realloc gets fresh on a stack of its own. The pin invokes a realloc as a call of its own, on a new Thread
 // whose storage starts [0, 0] (def:LiftLowerContext.reallocate:"self.inst.store.invoke(realloc, on_start,
