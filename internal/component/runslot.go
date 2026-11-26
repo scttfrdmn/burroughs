@@ -121,17 +121,29 @@ func (h *asyncHandles) takeRunSlot(ch *runChain, rec *cmThread, abort, stop, eng
 	if !h.fenceWriterEnter(ch, abort, stop, engine) {
 		return false
 	}
+	// **A free slot is taken before any end is asked about.** One select over the slot and the ends picks among the
+	// ready cases at random, so with the stop already closed a free slot could be refused: the callback re-entry of
+	// TestCloseReachesItsBoundWithANamedOutcome's uncooperative guest ended as "Close ended this entry while it waited
+	// for the run slot", where interp.ErrClosed or interp.ErrTerminated reclaim it (#1398's make ci, under -shuffle).
+	// The fence above already checks admission before it waits, which is this order.
+	//
+	// NEUTER, run: drop this select's first case, and TestAFreeRunSlotIsTakenAfterTheStop refuses 209 of its 300
+	// takes, and TestCloseReachesItsBoundWithANamedOutcome fails 120 of 200 (-count 200).
 	select {
 	case h.runSlot <- struct{}{}:
-	case <-abort:
-		h.fenceWriterLeave()
-		return false
-	case <-stop: // Close's stop (ADR 0139)
-		h.fenceWriterLeave()
-		return false
-	case <-engine: // the waiting agent's core instance closed or tore down (ADR 0139)
-		h.fenceWriterLeave()
-		return false
+	default:
+		select {
+		case h.runSlot <- struct{}{}:
+		case <-abort:
+			h.fenceWriterLeave()
+			return false
+		case <-stop: // Close's stop (ADR 0139)
+			h.fenceWriterLeave()
+			return false
+		case <-engine: // the waiting agent's core instance closed or tore down (ADR 0139)
+			h.fenceWriterLeave()
+			return false
+		}
 	}
 	h.mu.Lock()
 	h.runChain, h.runDepth = ch, 1

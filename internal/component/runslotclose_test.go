@@ -305,3 +305,38 @@ func TestATeardownOfTheCallersCoreInstanceEndsItsWaitForTheCalleesSlot(t *testin
 		}
 	})
 }
+
+// TestAFreeRunSlotIsTakenAfterTheStop is takeRunSlot's rule, *a wait that finds the slot free still takes it*, asked
+// directly. With Close's stop and the engine both already closed, every take of a free slot must hold it, and a take
+// of a held slot must end without it. #1398's first form chose among the ready cases at random, so a free slot could
+// be refused, and make ci found it through TestCloseReachesItsBoundWithANamedOutcome.
+//
+// NEUTER, run: drop the first case of takeRunSlot's outer select, and this fails with 209 of 300 takes refused.
+func TestAFreeRunSlotIsTakenAfterTheStop(t *testing.T) {
+	h := newAsyncHandles()
+	h.stopProducers()
+	ended := make(chan struct{})
+	close(ended)
+	const tries = 300
+	refused := 0
+	for range tries {
+		ch := &runChain{}
+		if !h.acquireRunFor(ch, nil, nil, ended) {
+			refused++
+			continue
+		}
+		h.releaseRunFor(ch)
+	}
+	if refused != 0 {
+		t.Fatalf("%d of %d takes of a free run slot were refused after Close's stop and the engine's end; a free "+
+			"slot is taken whatever has ended (takeRunSlot)", refused, tries)
+	}
+	holder := &runChain{}
+	if !h.acquireRun(holder, nil, nil) {
+		t.Fatal("the holder's take of a free slot was refused")
+	}
+	if h.acquireRunFor(&runChain{}, nil, nil, ended) {
+		t.Fatal("a take of a held slot did not end at Close's stop and the engine's end")
+	}
+	h.releaseRunFor(holder)
+}
