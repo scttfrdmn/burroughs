@@ -16,13 +16,14 @@ After E1a (ADR 0133) and E1b (ADR 0134), `wasi:filesystem/types@0.3.0`'s `descri
 - **times**: what precision, what range, and a symlink's own times;
 - the methods the WIT leaves to the host: `metadata-hash`'s function, `advise`, `sync` and `append-via-stream`.
 
-**Both fixtures were read on wasmtime 49.0.3 before this ADR.** `fs-mutate.wat` has 24 rows and `fs-rest.wat` has 41, every row 10 of 10 identical. They show five places where a faithful Burroughs cannot read as wasmtime does:
+**Both fixtures were read on wasmtime 49.0.3 before this ADR.** `fs-mutate.wat` has 25 rows and `fs-rest.wat` has 41, every row 10 of 10 identical. (`fs-mutate.wat`'s last row, a directory renamed onto an empty one, was added after this ADR's first draft and before any engine code, with every row read again.) They show six places where the standard library's obvious mechanism, or the WIT's text, does not read as wasmtime does:
 
 - **wasmtime renames and links across two preopens.** `rename-at` from one grant into another is ok. wasmtime resolves with `renameat` over two directory fds, and both of the fixture's trees are on one filesystem.
 - **wasmtime follows a stale descriptor.** A directory opened, then renamed by its parent, still takes a `rename-at` into it, since an fd survives the rename.
 - **wasmtime does not consult a child's flags.** `sub`, opened with `read` and no `mutate-directory`, takes `create-directory-at`, `unlink-file-at`, `rename-at`, `symlink-at`, `link-at`, `set-times-at` and `set-times`. The WIT's `mutate-directory` text says each must be `read-only`, and ADR 0133's child carries the flags it was opened with.
 - **wasmtime sets a symlink's own times** through `set-times-at` without `symlink-follow`.
 - **wasmtime's file `set-times` is nanosecond-precise** on darwin. Go's `syscall.Futimes` is microsecond-precise: measured, a `usec` of 1 is stored as 1000 ns.
+- **wasmtime renames a directory onto an empty directory,** replacing it as POSIX's rename does. `os.Root.Rename` refuses any destination that is an existing directory with `EEXIST`, as `os.Rename` does.
 
 ## Options
 
@@ -67,6 +68,13 @@ After E1a (ADR 0133) and E1b (ADR 0134), `wasi:filesystem/types@0.3.0`'s `descri
 - **`create-directory-at`:** `Root.Mkdir` at 0777 before the umask, `os.Mkdir`'s.
 - **`unlink-file-at` asks `Root.Lstat` first.** A directory is `not-permitted` on every platform. That is POSIX's own errno for unlinking a directory, and darwin's and wasmtime's reading, and the WIT allows it (*"`access` or `is-directory` may be returned instead of the POSIX-specified `not-permitted`"*). The check is needed, not chosen: `Root.Remove` removes an empty directory too. A symlink is removed as itself.
 - **`remove-directory-at` asks the same.** Anything but a directory, a symlink to one included, is `not-directory`, rmdir's `ENOTDIR`. A directory is then `Root.Remove`d, which answers `not-empty` and `invalid` (for `.`) as the platform does.
+- **`rename-at` onto an existing directory is answered as POSIX's rename answers it,** by asking `Root.Lstat` first, because `Root.Rename` refuses such a destination with `EEXIST`, as `os.Rename` does:
+  - onto itself it is `ok` with no effect, POSIX's *"shall return successfully and perform no other action"* (`Root.Rename` would refuse it);
+  - a file onto a directory is `is-directory`;
+  - a directory onto a non-empty one is `not-empty`;
+  - **a directory onto an empty one is `exist`.** POSIX replaces it, and so does wasmtime. Burroughs does not, because the replacement would be a remove and then a rename, and a failure between the two loses the destination. **This departs from wasmtime.**
+
+  Onto anything else, the rename is `Root.Rename`, whose `renameat` answers as the platform does.
 - **Each check is a check before an act,** and the act is still `os.Root`'s, so a swap in the window acts on something else inside the grant, never outside it.
 
 ### `readlink-at`, `symlink-at`, `link-at`
@@ -117,11 +125,12 @@ After E1a (ADR 0133) and E1b (ADR 0134), `wasi:filesystem/types@0.3.0`'s `descri
 ## Consequences
 
 - **Every method of `wasi:filesystem/types@0.3.0`'s `descriptor` is served.** None meets the refusing stub any more. ADR 0133's consequence *"Every other `descriptor` method still meets the refusing stub, by name"* is overtaken, not wrong: it was true of E1a.
-- **Four departures from wasmtime 49.0.3, each in fixture rows of its own,** with wasmtime's reading recorded beside the value Burroughs asserts:
+- **Five departures from wasmtime 49.0.3, each in fixture rows of its own,** with wasmtime's reading recorded beside the value Burroughs asserts:
   1. a rename or link across two grants is `cross-device`;
   2. a descriptor whose recorded path no longer names its directory is `cross-device` as the second descriptor of a rename or link;
   3. a child without `mutate-directory` is `read-only`;
-  4. a symlink's own times are `unsupported`.
+  4. a symlink's own times are `unsupported`;
+  5. a directory renamed onto an empty directory is `exist`.
 
   **The read-only grant's rows are not departures:** wasmtime's CLI grants no read-only directory (ADR 0133), so they come from the WIT's text, a file's times included.
 - **Named limits:**

@@ -165,6 +165,7 @@
     (data (i32.const 1664) "sub2/moved.txt")              ;; s36 14
     (data (i32.const 1696) "x")                           ;; s37 1
     (data (i32.const 1728) "other.txt")                   ;; s38 9
+    (data (i32.const 1760) "empty/inner.txt")             ;; s39 15
     (global $set (mut i32) (i32.const 0))
     ;; h: the last open's handle.
     (global $h (mut i32) (i32.const 0))
@@ -420,6 +421,14 @@
           (call $ul (local.get $d) (i32.const 512) (i32.const 9))
           (call $rd (local.get $d) (i32.const 960) (i32.const 5))
           (call $mv (local.get $d) (i32.const 512) (i32.const 9) (local.get $d) (i32.const 1344) (i32.const 9))))))
+      ;; 24 rename-dir-over-empty: sub over empty (an empty directory); empty/inner.txt's kind; sub's kind; hello.txt
+      ;; over itself.
+      (if (i32.eq (local.get $row) (i32.const 24)) (then
+        (local.set $x (call $mv (local.get $d) (i32.const 640) (i32.const 3) (local.get $d) (i32.const 960) (i32.const 5)))
+        (local.set $y (call $kind (local.get $d) (i32.const 1) (i32.const 1760) (i32.const 15)))
+        (local.set $z (call $kind (local.get $d) (i32.const 0) (i32.const 640) (i32.const 3)))
+        (return (call $pack (local.get $x) (local.get $y) (local.get $z)
+          (call $mv (local.get $d) (i32.const 512) (i32.const 9) (local.get $d) (i32.const 512) (i32.const 9))))))
       (unreachable)))
   (core instance $gi (instantiate $gm (with "" (instance (export "m" (memory $m)) (export "getdirs" (func $getdirs-low))
     (export "statat" (func $statat-low)) (export "openat" (func $openat-low)) (export "mkdir" (func $mkdir-low))

@@ -9,7 +9,7 @@
 #              out-link -> the absolute path of outside/; tree2/ holds other.txt "other"; outside/ holds victim.txt "v"
 #              and victim/. No row reads a directory, so host directory order is never read.
 # Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical. Taken
-#              2026-11-26, before the engine code.
+#              2026-11-26, before the engine code; every row was read again with rename-dir-over-empty added.
 #
 # Each line is `<row>: <reading>`, and the test reads them by row. The row's number is its line's position, from 0.
 mkdir: 8782336
@@ -61,6 +61,12 @@ sync-lower: 1280
 # empty removed, and the rename of hello.txt (gone by then) no-entry.
 read-only: 2694881440
 #
+# Burroughs', by ADR 0138: os.Root's Rename refuses a destination that is an existing directory, as os.Rename does, and
+# Burroughs does not replace one in two steps, so a directory renamed over an empty directory is exist. wasmtime 49.0.3
+# replaces it, as POSIX's rename does, and reads 9635072 (0x00930500): ok; empty/inner.txt a regular-file; sub gone;
+# hello.txt over itself ok.
+rename-dir-over-empty: 168838
+#
 # Meaning: four bytes, byte 0 the low one. An operation's byte is 0 for ok and 0x80 | its error-code case for an error
 # (0x86 exist, 0x8b invalid, 0x8d is-directory, 0x93 no-entry, 0x97 not-directory, 0x98 not-empty, 0x9e not-permitted,
 # 0xa0 read-only, 0xa3 cross-device). A kind byte is stat-at's type when ok (2 directory, 5 regular-file).
@@ -99,3 +105,5 @@ read-only: 2694881440
 #   child-read-more      0xa0a0a0a0: each read-only, before the escape and the existing name are resolved.
 #   sync-lower           0x00000500: rename-at through its sync lower ok; moved.txt a regular-file.
 #   read-only            0xa0a0a0a0: on a read-only grant each is read-only, and the tree is unchanged.
+#   rename-dir-over-empty 0x00029386: sub over empty exist; no empty/inner.txt; sub still a directory; hello.txt over
+#                        itself ok.
