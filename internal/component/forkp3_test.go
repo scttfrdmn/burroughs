@@ -316,8 +316,10 @@ func TestForkWasip3C1MatchesWasmtime(t *testing.T) {
 }
 
 // forkP3HangGuard bounds one run of an F5 witness. A goroutine the fork's netpoller never readies leaves the run
-// parked or spinning for good, and the guard turns that into a failure. It is a harness bound, not a measurement.
-const forkP3HangGuard = 20 * time.Second
+// parked or spinning for good, and the guard turns that into a failure that names its place (forkP3Place). It is a
+// harness bound, not a measurement, so it is scaled under `-race` (raceGuardScale, #1391): main 95ef893's macOS race
+// job failed TestForkWasip3PollMatchesWasmtime at 20 s with the job at 92% of its budget, and its re-run passed.
+const forkP3HangGuard = 20 * time.Second * raceGuardScale
 
 // runForkP3 runs name's `run` export with stdin under forkP3HangGuard, and returns its exit code, stdout and stderr.
 func runForkP3(t *testing.T, name string, stdin io.Reader) (code int, stdout, stderr string) {
@@ -348,10 +350,52 @@ func runForkP3Host(t *testing.T, name string, guard time.Duration, newHost func(
 		}
 		return r.code, out.String(), errb.String()
 	case <-time.After(guard):
-		t.Fatalf("%s's run did not return within %v: a goroutine parked in the fork's netpoller was never readied",
-			name, guard)
+		// The stacks are taken before the deferred Close, which would move every goroutine named here.
+		t.Fatalf("%s's run did not return within %v. %s", name, guard, forkP3Place(goroutineStacks(), in.w))
 	}
 	return 0, "", ""
+}
+
+// forkP3Place names where a run that outlived its guard is, so a recurrence can be classified. A goroutine parked in
+// waitable-set.wait's select is where the fork's netpoller waits (netpoll(-1), and netpoll(delay) beside its
+// wait-for timer): parked with no timer pending, nothing the host does can wake it, which is a lost wake; parked
+// with one pending, it is waiting for that timer. A goroutine running or runnable in guest code is a run still
+// computing. The report lists the instance's pending host timers, the run's own goroutine (the one in CallRun, which
+// the test started, so agentsPlace does not list it), and every goroutine an engine file started (agentsPlace).
+// Frames are matched by bare name, as parkFrames' are.
+//
+// #1391: main 95ef893's macOS race job failed TestForkWasip3PollMatchesWasmtime here with a fixed sentence about the
+// netpoller and no place, so that reading could not tell a lost wake from a slow runner, and it stays unclassified.
+//
+// Run with the guard shrunk to 20 ms: plain, p3poll's goroutine read parked in waitable-set.wait with 1 timer
+// pending, a wait for its timer; under `-race` (80 ms), runnable in `interp.(*global).set`, a run still computing.
+func forkP3Place(stacks string, w *walker) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d goroutine(s) parked in waitable-set.wait's select, where the fork's netpoller waits, with %d "+
+		"wait-for/wait-until timer(s) pending; the run's goroutine:", len(parkedIn(stacks, parkFrames[0])),
+		pendingHostWaits(w))
+	for _, g := range strings.Split(stacks, "\n\n") {
+		if strings.Contains(g, "CallRun") {
+			describeGoroutine(&b, g)
+		}
+	}
+	b.WriteString("\n" + agentsPlace(stacks))
+	return b.String()
+}
+
+// pendingHostWaits counts the wait-for and wait-until timers started and not yet fired, cancelled or stopped, in w's
+// table and every nested one's (ADR 0121's registry).
+func pendingHostWaits(w *walker) int {
+	n := 0
+	if w.async != nil {
+		w.async.mu.Lock()
+		n = len(w.async.hostWaits)
+		w.async.mu.Unlock()
+	}
+	for _, c := range w.children {
+		n += pendingHostWaits(c)
+	}
+	return n
 }
 
 // matchForkP3Reading compares one run with the reading recorded under key: "<key>, 10 of 10" is the exit code, and

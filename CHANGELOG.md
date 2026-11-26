@@ -260,6 +260,13 @@ says what it now requires and what it gives up.
   `wasi:http`'s outgoing half (#1383) is the first engine code to call `net/http.Transport`, and `make ci`'s
   vuln gate refused that tree on go1.26.9. The language line stays `go 1.26`. This is its own gated change, as every
   toolchain bump is, so the advisory fix and the feature can be reviewed and reverted apart.
+- **`make race`'s per-package timeout is 70m, up from 50m, and its budget 4200s, up from 3000s**
+  ([#1391](https://github.com/scttfrdmn/burroughs/issues/1391)). The macOS race job read 72–89% of its budget on
+  main's last eight runs, and 92% on the run #1391 records. The work grew: on the arm64 leg, whose runner does not
+  drift, `cmd/burroughs` went from 52s to 488s under `-race` with C3's multi-M witness (#1345), and
+  `internal/component` from 87s to 632s, while `internal/spec` held. `internal/spec` on macOS measured 2025.317s,
+  which left 50m at 1.48× the largest completed observation. 70m is ≈2.07×, the Makefile's rule, and the budget
+  moves with it.
 
 ### Fixed
 

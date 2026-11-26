@@ -495,7 +495,35 @@ race:
 # 40438827329). Neither was a hang: the stack at the timeout showed a test running, not parked. **50m is ≈2.07×
 # 1447.682s, the "about 2×" this note's own rule asks for.** The budget moves with it, so `budget.sh`'s 75%
 # warning stays meaningful.
-	@./scripts/budget.sh 3000 race -- $(GO) test -race -timeout 50m -shuffle=on \
+#
+# **AMENDED 2026-11-26 (#1391): 50m → 70m, and the budget 3000s → 4200s, because the work grew.** The job's own
+# line, "race used Ns of 3000s", on the eight main runs 95ef893 to 0c3908e (runs 45495634343 to 45764244565):
+#
+#   | leg              | race used     | of 3000s |
+#   |------------------|---------------|----------|
+#   | macos-15         | 2164s – 2693s | 72–89%   |
+#   | ubuntu-24.04     | 1370s – 2109s | 45–70%   |
+#   | ubuntu-24.04-arm | 1559s – 1597s | 51–53%   |
+#
+# and 2766s (92%) on 95ef893's first attempt, the one #1391 records. Five of the eight macOS readings were past the
+# 75% warning.
+#
+# **What grew, read on the leg whose runner does not drift.** The race step's median on ubuntu-24.04-arm, over sixty
+# main runs, was 1469s from 2026-11-12 to 2026-11-23 and 1572s from 413bc77 (2026-11-24) on. Per package there,
+# `cmd/burroughs` went from 52s on 8988761 to 189s on d5e9a80 and 488s on 413bc77, which added C3's multi-M witness
+# (#1345). `internal/component` went from 87s to 305s to 632s with v0.15.0's and v0.16.0's witnesses.
+# `internal/spec` stayed between 1366s and 1480s. Packages run beside one another, and `internal/spec` is arm64's
+# critical path, so the job grew by much less than its packages did. macOS's race runner is slower, so the same work
+# costs it more of the job: its median went 1922s, then 2091s (2026-11-20 to 11-23), then 2370s. Its spread within
+# the last eight, at nearly the same work, is 1.24×, and that part is the runner's. **So both of `budget.sh`'s
+# causes are present.** The work that grew is multi-agent witness work, which is what this target runs under
+# `-race` for, so it stays here; the Phase 4 clauses were relocated for a different reason.
+#
+# **The rule, applied.** `internal/spec` under `-race` on macos-15 measured **2025.317s** on aa0a0e4 (run
+# 45267840455) and 1985.153s on 13f4960 (run 45685675159). That left 50m at **1.48×** the largest completed
+# observation. **70m is ≈2.07× 2025.317s**, the multiplier the last amendment chose. The budget moves with it: the
+# worst job reading, 2766s, is 66% of 4200s, so the next growth is reported while there is still room.
+	@./scripts/budget.sh 4200 race -- $(GO) test -race -timeout 70m -shuffle=on \
 		-skip 'TestClause2|TestClause3' ./...
 
 # witnesses — Phase 4's clauses 1–3, which are expensive and have their own budget.
