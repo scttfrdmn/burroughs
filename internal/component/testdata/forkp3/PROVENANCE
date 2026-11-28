@@ -621,9 +621,9 @@ the directory answers 500 "...: not-exist", since a path under no preopen is ENO
 
 C4's in-tree arms (#1380), the Burroughs step: cmd/burroughs/c4svc_test.go. The fork step's peer and client are carried
 in-test, their output unchanged, and so is its scratch harness's writeConfig (the file, its sha256, the test's names):
-  p3svcpeer.go.txt    1b32d99bb8273576af61840a0741e7ab1e47b308c276587ebb2d9b928cb8cbd5  c4PeerMux, startC4Peer
-  p3svcclient.go.txt  d634d91a77d02b6d72cf1f2b535662987a5bd9ad92d32cca126108fe18aef41a  c4Client
-  p3svcrun.go.txt     ce6e31dd2436492b793c4c121d9158f6fc2c7a5e5d9cc7afd15fc7f64ca8922a  writeC4Config
+  p3svcpeer.go.txt: sha256 1b32d99bb8273576af61840a0741e7ab1e47b308c276587ebb2d9b928cb8cbd5, as c4PeerMux, startC4Peer
+  p3svcclient.go.txt: sha256 d634d91a77d02b6d72cf1f2b535662987a5bd9ad92d32cca126108fe18aef41a, as c4Client
+  p3svcrun.go.txt: sha256 ce6e31dd2436492b793c4c121d9158f6fc2c7a5e5d9cc7afd15fc7f64ca8922a, as writeC4Config
 None of the three is committed as a file: their code is the test's. c4Client adds a hang guard to each request
 (c4Guard, 60 s, 240 s under -race), and a request it ends fails at its place rather than printing a kind.
 
