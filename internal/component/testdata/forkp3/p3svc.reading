@@ -1,0 +1,46 @@
+GET /: status 200 "200 OK"
+  header Content-Type: ["text/plain; charset=utf-8"]
+  body 28 bytes sha256 5fd80a3261bacb33f94aad76cfbd2ccd7f5a07e34cb7599e517ca84e33a62873, ok
+  body "hello from p3svc's app.conf\n"
+GET /config: status 200 "200 OK"
+  header Content-Type: ["text/plain; charset=utf-8"]
+  body 80 bytes, ok, equal to the host app.conf's sha256 and line count: true
+  body "sha256 <the host app.conf's sha256>\nlines 3\n"
+GET /files: status 200 "200 OK"
+  header Content-Type: ["text/plain; charset=utf-8"]
+  body 27 bytes sha256 21a0a4530f14638433c52f5104fb13593e4dbd5559e6c6a594f1c75c5de1f1eb, ok
+  body "app.conf\nconf.d/\nnotes.txt\n"
+GET /missing: status 404 "404 Not Found"
+  header Content-Type: ["text/plain; charset=utf-8"]
+  header X-Content-Type-Options: ["nosniff"]
+  body 10 bytes sha256 577585c9986bfe4b2dfd4824b4c1e8499d3d909c9617b551d3a60615b5904686, ok
+  body "not-exist\n"
+GET /proxy: status 200 "200 OK"
+  header Content-Type: ["text/plain; charset=utf-8"]
+  header X-Peer-Data: ["c4-peer-v1"]
+  body 111 bytes sha256 3cf949c9b2e2a15f22504cb8bdc9f882e8ccee9f131f442f7acaa3e3d30750ed, ok
+  body "peer status 200\npeer body 100003 bytes sha256 56190c6e65c39d9d4971e6d5fd1abba31ed8ce239cfe8476647b9163720c930e\n"
+POST /proxy-post: sending 200011 bytes sha256 63c760f69107a0380568747254fa56b9b2478b4617cd31c83effeb39d1806483
+POST /proxy-post: status 200 "200 OK"
+  header Content-Type: ["text/plain; charset=utf-8"]
+  body 108 bytes sha256 a17538d5666bd484380ab8827f294fff55edbd12634c1732cf77933a247bc840, ok
+  body "peer read 200011 bytes sha256 63c760f69107a0380568747254fa56b9b2478b4617cd31c83effeb39d1806483, method POST\n"
+GET /peer-down: status 502 "502 Bad Gateway"
+  header Content-Type: ["text/plain; charset=utf-8"]
+  header X-Content-Type-Options: ["nosniff"]
+  body 13 bytes sha256 5bd35bbe7dff2e54c3bed82aa3bbaf174f4955757c88db70c8c81517de09afc8, ok
+  body "ECONNREFUSED\n"
+GET /big: status 200 "200 OK"
+  header Content-Type: ["application/octet-stream"]
+  header Content-Length: ["1048576"]
+  body 1048576 bytes sha256 ea2a566f97beb323c86c274ce28a8f35cc01d44301b46bd94cb6264440e2e395, ok
+app.conf's greeting rewritten
+GET /: status 200 "200 OK"
+  header Content-Type: ["text/plain; charset=utf-8"]
+  body 57 bytes sha256 69cb8dbfaf40d5f455cdbb9b54a3e212d0680ea1e01437c49094927064341553, ok
+  body "hello again: app.conf was rewritten between two requests\n"
+GET /config: status 200 "200 OK"
+  header Content-Type: ["text/plain; charset=utf-8"]
+  body 80 bytes, ok, equal to the host app.conf's sha256 and line count: true
+  body "sha256 <the host app.conf's sha256>\nlines 3\n"
+done

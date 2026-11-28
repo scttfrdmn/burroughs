@@ -514,3 +514,150 @@ The neuters, each a temporary edit, made and reverted with the editor, never com
                                                   is not provided (stub host; ...)". Refused by name at the runtime's
                                                   first spawn, not at instantiation: an import no table serves is bound
                                                   to the stub host, as every unserved import is. P: no READY line.
+
+C4's witness component (#1380), v0.16.0's: p3svc, an ordinary Go net/http service built as GOOS=wasip3's reactor, which
+serves its handlers through wasi:http, reads its configuration from a preopened directory, and sends outbound requests
+through http.DefaultTransport. Same recipe and same pins as F1's, except:
+
+Fork SHA:     3f2d6e4916e2757952b0bd21dcb94886edce2639 (branch wasip3/c4, made from wasip3/f13 at that commit, its head: F13's
+              design note, phase4/wasip3-f13.md, after its code commit dfc7e18fb1). C4 changes nothing in the fork: no fork
+              fix was needed, so wasip3/c4 has no commit of its own and the tree was clean throughout
+Toolchain:    go version go1.28-devel_c2c179140a Thu Nov 26 13:25:33 2026 -0800 darwin/arm64
+              (F12-in's: the fork's bin/go from src/make.bash at wasip3/f12in's tree, whose version names wasip3/f12out's
+              head c2c179140a. F13 changed no cmd or runtime file, so the toolchain is unchanged, and every build compiles
+              F13's syscall, internal/wasi and net from source; bootstrapped by go1.26.9)
+wasm-tools:   1.258.0
+WIT:          WASI 0.3.0, the fork's phase4/wit-wasi-0.3.0 (copied verbatim from the wasip3 crate 0.8.0+wasi-0.3.0); world
+              wasmpreempt:wasip3-f1/service-cli, declared in that directory's root.wit: wasi:http/service@0.3.0 with
+              wasi:cli/imports@0.3.0, F12-in's union world
+Built on:     darwin/arm64 (Apple M4 Pro), 2026-11-28
+Guest source: three files of one module, each committed as .go.txt under its own name and built under the name in
+              parentheses: p3svc.go.txt (p3svc.go, the handlers, which every build compiles), p3svc_serve_native.go.txt
+              (serve_native.go, //go:build !wasip3: http.ListenAndServe, the configuration directory a flag) and
+              p3svc_serve_reactor.go.txt (serve_reactor.go, //go:build wasip3: wasihttp.Handle from init, the configuration
+              directory the preopen /config). go.mod is "module p3svc" and "go 1.26", the go.mod arm N's stock-Go build has,
+              so both builds take the same language version's GODEBUG defaults (C2's reason). The handlers import bytes,
+              crypto/sha256, errors, fmt, io, io/fs, net/http, os, path/filepath, strconv, strings and syscall;
+              serve_native.go flag, fmt, net/http and os; serve_reactor.go net/http/wasihttp. No linkname.
+Recipe:       F12-in's reactor build:
+                  BUILDP3_REACTOR=1 phase4/buildp3.sh <dir> <out>/p3svc.wasm
+              which is, after checking the core module (no wasi_snapshot_preview1 import; only wasi: imports, the nine $root
+              built-ins the reactor admits, and handle's task.return once; the handler's two exports once each and typed,
+              cabi_realloc and memory once, no wasi:cli/run; an unshared memory):
+                  GOOS=wasip3 GOARCH=wasm bin/go -C <dir> build -trimpath -buildmode=c-shared -o p3svc.core.wasm .
+                  wasm-tools component embed --world wasmpreempt:wasip3-f1/service-cli phase4/wit-wasi-0.3.0 \
+                      p3svc.core.wasm -o p3svc.embedded.wasm
+                  wasm-tools component new p3svc.embedded.wasm -o p3svc.wasm
+                  wasm-tools validate --features all p3svc.wasm
+              <dir> holds the three files and the go.mod, OUTSIDE any VCS checkout (C3's reason: go build stamps vcs.* into
+              a module built inside one).
+Order:        NOT reading-first. The wasm was built, and passed buildp3.sh, before arm N's reading was taken; both on
+              2026-11-28, in one session. p3svc.reading is arm N's client stdout, byte for byte: the source built by stock
+              go1.26.9 darwin/arm64 (-trimpath, CGO_ENABLED=0) and served by http.ListenAndServe as a host process.
+
+  p3svc.wasm
+    sha256: d8b1e1c0fc22598d18475f38c2437f1062a47d5e98daea8d6ba42d465dd6d9ae
+    bytes:   11022814
+    core:    10979245 bytes, sha256 0e75f9817781333ab31709f7e18278c1557ae61fca252a9456e9e81b747e9d63
+
+Built twice, from two scratch directories into two output directories: identical bytes, component and core (cmp). Its
+core module imports 172 names:
+  - 59 wasi:http: 58 wasi:http/types and wasi:http/client's send, F12-out's client with F12-in's request, response and
+    body built-ins;
+  - 30 wasi:filesystem: 29 wasi:filesystem/types and wasi:filesystem/preopens' get-directories, F11's;
+  - 30 wasi:sockets/types: 22 tcp-socket and 8 udp-socket names. http.DefaultTransport's RoundTrip links the stock
+    Transport for a Transport with a dial hook (roundtrip_wasip3.go), and its net.Dialer reaches both socket kinds. No
+    route dials through them;
+  - 25 wasi:cli (environment 2, exit 2, stdin 9, stdout 6, stderr 6), 4 wasi:clocks (monotonic-clock 3, system-clock 1)
+    and 2 wasi:random;
+  - 21 $root: the seven netpoller built-ins, several under more than one Go symbol (waitable-set-new, waitable-join,
+    waitable-set-wait, waitable-set-drop and subtask-drop three times each, waitable-set-poll and subtask-cancel twice),
+    and [context-get-0] and [context-set-0];
+  - handle's task.return:
+
+    (import "[export]wasi:http/handler@0.3.0" "[task-return]handle" (func (;171;) (type 21)))
+    (memory (;0;) 94)
+    (export "[async-lift]wasi:http/handler@0.3.0#handle" (func $wasm_export_wasip3_handle))
+    (export "[callback][async-lift]wasi:http/handler@0.3.0#handle" (func $wasm_export_wasip3_callback))
+    (export "cabi_realloc" (func $cabi_realloc))
+    (export "memory" (memory 0))
+
+The memory is unshared. cabi_realloc is internal/wasi's.
+
+THREE ARMS, one client: p3svcclient.go.txt, a stock-Go program, its stdout compared. A stock-Go peer
+(p3svcpeer.go.txt) on 127.0.0.1:0 serves /data (200, X-Peer-Data: c4-peer-v1, 100003 fixed bytes) and /echo (the length
+and sha256 of the body it read). Before each run the harness writes the configuration directory: app.conf
+("greeting=hello from p3svc's app.conf", "peer=<the peer's base URL>", "down=http://127.0.0.1:<a port listened on and
+closed>"), notes.txt and conf.d/extra.conf. The client requests ten routes, each on a connection of its own: /, /config,
+/files, /missing, /proxy, POST /proxy-post (200011 bytes), /peer-down, /big; then it rewrites app.conf's greeting and
+requests / and /config again. It prints the status, the selected headers (never Date; Content-Length only for /big, which
+fixes it), and the body's length and sha256, a body of 512 bytes or fewer quoted. /config's body names a sha256 of a file
+that holds the peer's port, so the client compares it with the host's app.conf and prints the comparison. stdout is 46
+lines, 2622 bytes, sha256 802ddf497a70c63679605f74ba38fc5967ad14123b3e3bc043402e7e50db0e7d (p3svc.reading).
+
+Darwin/arm64 (Apple M4 Pro, macOS 27.2.1), 2026-11-28, local and unmeasured, through a scratch harness (p3svcrun.go.txt):
+each server under `timeout -k 5 120` in a process group of its own, readiness its port accepting a TCP connection, the
+client under `timeout -k 5 60`, and the group ended with SIGINT, then SIGKILL after 10 s. Every run: client exit 0, client
+stderr empty, the server alive when the harness stopped it.
+
+  N:  p3svc built by stock go1.26.9, -trimpath, CGO_ENABLED=0, run as
+          p3svc -addr 127.0.0.1:<port> -config <dir>
+      10 of 10, p3svc.reading.
+  O:  wasmtime 49.0.3 (f96eabaa1 2026-10-14), offline, not in CI:
+          wasmtime serve -S cli --dir <dir>::/config --max-instance-reuse-count 1 --addr 127.0.0.1:<port> p3svc.wasm
+      10 of 10, p3svc.reading byte for byte. -S cli is the one flag the component needs: without it, serve refuses it at
+      startup ("component imports instance `wasi:filesystem/types@0.3.0`, but a matching implementation was not found in
+      the linker"). Outgoing HTTP needs no flag: -S http reads the same bytes, and -S http=n is refused ("wasi-http is
+      required for the serve command, and must not be disabled"). With the default instance reuse the stdout is the same.
+      Each of these probes is one run.
+  B:  Burroughs main daed94350caef21d8f1bc47ae405c3944482f1e7, built from a git archive of that commit with
+      GOTOOLCHAIN=go1.26.11 go build ./cmd/burroughs:
+          burroughs serve --dir <dir>:/config --addr 127.0.0.1:<port> p3svc.wasm
+      10 of 10, p3svc.reading byte for byte. serve grants outgoing HTTP itself (ADR 0137).
+
+No arm differs from another on any line. With no --dir, wasmtime and Burroughs read one stdout (one run each), whose first
+line that differs from the reading is its first, "GET /: status 500 \"500 Internal Server Error\"": every route that reads
+the directory answers 500 "...: not-exist", since a path under no preopen is ENOENT (F11).
+
+C4's in-tree arms (#1380), the Burroughs step: cmd/burroughs/c4svc_test.go. The fork step's peer and client are carried
+in-test, their output unchanged, and so is its scratch harness's writeConfig (the file, its sha256, the test's names):
+  p3svcpeer.go.txt: sha256 1b32d99bb8273576af61840a0741e7ab1e47b308c276587ebb2d9b928cb8cbd5, as c4PeerMux, startC4Peer
+  p3svcclient.go.txt: sha256 d634d91a77d02b6d72cf1f2b535662987a5bd9ad92d32cca126108fe18aef41a, as c4Client
+  p3svcrun.go.txt: sha256 ce6e31dd2436492b793c4c121d9158f6fc2c7a5e5d9cc7afd15fc7f64ca8922a, as writeC4Config
+None of the three is committed as a file: their code is the test's. c4Client adds a hang guard to each request
+(c4Guard, 60 s, 240 s under -race), and a request it ends fails at its place rather than printing a kind.
+
+Darwin/arm64 (Apple M4 Pro), 2026-11-28, local, Burroughs daed9435 plus this slice's commits (engine files: comments
+only), GOTOOLCHAIN=go1.26.11:
+
+  N:  TestC4HostServerMatchesItsReading: the three sources, as p3svc.go, serve_native.go and serve_reactor.go beside
+      the go.mod above, built by the Go running the test (go1.26.11, -trimpath, CGO_ENABLED=0) and run as
+          p3svc -addr 127.0.0.1:<port> -config <dir>
+      readiness its port accepting a connection. p3svc.reading byte for byte, 3 of 3, and 3 of 3 under -race.
+  B:  TestC4BurroughsServeMatchesTheHostReading, in-process through serveCmd with BURROUGHS_ASYNC=1:
+          burroughs serve --dir <dir>:/config --addr 127.0.0.1:0 p3svc.wasm
+      readiness its own "Serving HTTP on http://ADDR/" line, the address read from it. Three runs a test, each with a
+      peer, a directory and a serve of its own: p3svc.reading byte for byte, 9 of 9, and 9 of 9 under -race; about
+      1.9 s a run, 22 s under -race. Every run: serve returned nil at its stop, wrote nothing to stdout and only its
+      address line to stderr, and left no goroutine the run started.
+  C:  TestC4BurroughsServeWithNoDirAnswersNotExist: the same with no --dir. 2459 bytes, sha256
+      d48397112b063e5efc6498e3671fbc1afa02b5415b62184807d7fc44674aa7d2, the fork step's no-dir reading by its first 16
+      digits; line 1 "GET /: status 500 ...", the eight responses that read the directory 500 "...: not-exist", and
+      /missing and /big the reading's lines. 3 of 3, and 3 of 3 under -race.
+
+The neuters, each a temporary edit, made and reverted with the editor, never committed, and each recorded at its site:
+  serve.go's Preopens without                B: each run the no-dir stdout, C's sha256, its first differing line line 1,
+  dirs.preopens() (--dir not passed):        "GET /: status 500 ...". C passes, as it must: it is the state made.
+  serve.go's AllowHTTP false:                B: each run at line 18, "GET /proxy: status 502 ...", body "peer:
+                                             permission\n"; /proxy-post 502 at line 24; /peer-down "permission\n" at
+                                             line 32. Lines 1 to 17 the reading's.
+  hostfs.go's openAt opening p with          B: each run at line 1, "GET /: status 500 ...", every open of app.conf
+  os.OpenFile (the grant's resolution        "config: not-exist", while /files at line 9 still lists the grant:
+  dropped):                                  2452 bytes, neither the reading nor C's.
+  openAt's own neuter, path arithmetic       vacuous: B 3 of 3. p3svc opens no path that leaves its grant.
+  for os.Root:
+  hostserve.go's release made in answered    vacuous: B 9 of 9, and 3 of 3 under -race: the client is sequential.
+  and not in finish (reuse counted to        TestAServedInstanceIsReusedOnlyAfterItsTaskExits failed under it, its
+  task.return, wasmtime's count):            GET /hello answered with the 500 page, as ADR 0137 records.
+  C given the grant (the test's own):        C: at line 1, "GET /: status 200 ...", at the eight directory
+                                             responses, and at its digest.

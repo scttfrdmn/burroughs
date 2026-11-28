@@ -1,0 +1,201 @@
+// p3svc is C4's witness service (Burroughs #1380), v0.16.0's: an ordinary Go net/http service whose
+// handlers read their configuration from a directory and make outbound requests through
+// http.DefaultTransport. The handlers are this file, which every build compiles. Natively stock Go
+// serves them (serve_native.go: http.ListenAndServe, the directory a flag); on the fork's GOOS=wasip3
+// the reactor serves them through wasi:http (serve_reactor.go: wasihttp.Handle from init, the directory
+// the preopen /config).
+//
+// The directory holds app.conf: lines of key=value naming the greeting, the peer's base URL, and the
+// base URL of a port nothing listens on. The harness writes it before each run, and the peer's port
+// differs between runs, so no response carries the file's bytes or a URL read from it.
+//
+//	/            200, the greeting, app.conf read on every request
+//	/config      app.conf's sha256 and its number of lines, read through os.ReadFile
+//	/files       os.ReadDir of the directory: the names, sorted, a directory's ending "/"
+//	/missing     a file that does not exist: 404 and the error's kind, never its text
+//	/proxy       GET the peer's /data through http.DefaultTransport: the peer's status, its
+//	             X-Peer-Data header, and its body's length and sha256
+//	/proxy-post  POST this request's body to the peer's /echo: the peer's status and answer
+//	/peer-down   GET the port nothing listens on: 502 and the error's kind
+//	/big         1 MiB made in the handler, with its Content-Length
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+)
+
+// configDir is the configuration directory: a flag natively, the preopen /config on wasip3.
+var configDir string
+
+// confName is the configuration file in configDir.
+const confName = "app.conf"
+
+// A config is app.conf's three keys.
+type config struct {
+	greeting, peer, down string
+}
+
+// loadConfig reads app.conf. Every handler that needs it calls it, so the file is read on every
+// request.
+func loadConfig() (config, error) {
+	b, err := os.ReadFile(filepath.Join(configDir, confName))
+	if err != nil {
+		return config{}, err
+	}
+	var c config
+	for _, ln := range strings.Split(string(b), "\n") {
+		k, v, ok := strings.Cut(ln, "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "greeting":
+			c.greeting = v
+		case "peer":
+			c.peer = v
+		case "down":
+			c.down = v
+		}
+	}
+	if c.greeting == "" || c.peer == "" || c.down == "" {
+		return c, errors.New("app.conf lacks greeting, peer or down")
+	}
+	return c, nil
+}
+
+// kind names an error by what it is, never by its text, which differs between platforms and names
+// paths and ports.
+func kind(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "not-exist"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "ECONNREFUSED"
+	case errors.Is(err, fs.ErrPermission):
+		return "permission"
+	}
+	return "other"
+}
+
+// bigBody is /big's body, made in the handler on every request.
+func bigBody() []byte {
+	b := make([]byte, 1<<20)
+	for i := range b {
+		b[i] = byte(i*7+i>>11) ^ 0x5c
+	}
+	return b
+}
+
+func newMux() *http.ServeMux {
+	m := http.NewServeMux()
+	m.HandleFunc("/{$}", func(w http.ResponseWriter, r *http.Request) {
+		c, err := loadConfig()
+		if err != nil {
+			http.Error(w, "config: "+kind(err), http.StatusInternalServerError)
+			return
+		}
+		io.WriteString(w, c.greeting+"\n")
+	})
+	m.HandleFunc("/config", func(w http.ResponseWriter, r *http.Request) {
+		b, err := os.ReadFile(filepath.Join(configDir, confName))
+		if err != nil {
+			http.Error(w, "config: "+kind(err), http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprintf(w, "sha256 %x\nlines %d\n", sha256.Sum256(b), bytes.Count(b, []byte("\n")))
+	})
+	m.HandleFunc("/files", func(w http.ResponseWriter, r *http.Request) {
+		ents, err := os.ReadDir(configDir)
+		if err != nil {
+			http.Error(w, "files: "+kind(err), http.StatusInternalServerError)
+			return
+		}
+		for _, e := range ents {
+			name := e.Name()
+			if e.IsDir() {
+				name += "/"
+			}
+			fmt.Fprintln(w, name)
+		}
+	})
+	m.HandleFunc("/missing", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := os.ReadFile(filepath.Join(configDir, "missing.conf")); err != nil {
+			http.Error(w, kind(err), http.StatusNotFound)
+			return
+		}
+		io.WriteString(w, "missing.conf exists\n")
+	})
+	m.HandleFunc("/proxy", func(w http.ResponseWriter, r *http.Request) {
+		c, err := loadConfig()
+		if err != nil {
+			http.Error(w, "config: "+kind(err), http.StatusInternalServerError)
+			return
+		}
+		resp, err := http.Get(c.peer + "/data")
+		if err != nil {
+			http.Error(w, "peer: "+kind(err), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			http.Error(w, "peer body: "+kind(err), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("X-Peer-Data", resp.Header.Get("X-Peer-Data"))
+		w.WriteHeader(resp.StatusCode)
+		fmt.Fprintf(w, "peer status %d\npeer body %d bytes sha256 %x\n", resp.StatusCode, len(b), sha256.Sum256(b))
+	})
+	m.HandleFunc("/proxy-post", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		c, err := loadConfig()
+		if err != nil {
+			http.Error(w, "config: "+kind(err), http.StatusInternalServerError)
+			return
+		}
+		resp, err := http.Post(c.peer+"/echo", "application/octet-stream", r.Body)
+		if err != nil {
+			http.Error(w, "peer: "+kind(err), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	})
+	m.HandleFunc("/peer-down", func(w http.ResponseWriter, r *http.Request) {
+		c, err := loadConfig()
+		if err != nil {
+			http.Error(w, "config: "+kind(err), http.StatusInternalServerError)
+			return
+		}
+		resp, err := http.Get(c.down + "/")
+		if err != nil {
+			http.Error(w, kind(err), http.StatusBadGateway)
+			return
+		}
+		resp.Body.Close()
+		fmt.Fprintf(w, "the closed port answered %d\n", resp.StatusCode)
+	})
+	m.HandleFunc("/big", func(w http.ResponseWriter, r *http.Request) {
+		b := bigBody()
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.Itoa(len(b)))
+		w.Write(b)
+	})
+	return m
+}

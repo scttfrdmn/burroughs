@@ -22,3 +22,4 @@ TestGoRuntimeTortureSuite	1165	c1alloc: a shared memory on the fallback path can
 TestC3BurroughsRunMatchesTheHostReading	1165,674	C3's multi-M Go guest: its shared memory on the fallback path cannot grow past 128 pages, "out of memory: cannot allocate 1572864-byte block" (run 45299544136)
 TestC3MultiMRunsOnAtLeastFourAgents	1165,674	the same guest, in-process: the same out-of-memory at the 128-page cap (run 45299544136)
 TestTheStopsFlushEndsAtItsDeadline	1310	the 16 MiB flush ends before its 2s deadline even after a measured block (1.19s, run 43988768803): unclassified, likely buffer autotuning
+TestC4HostServerMatchesItsReading	1415	arm N, stock Go on Windows: a refused dial is Errno(10061), which errors.Is does not match to ECONNREFUSED, so /peer-down reads "other" (run 46146916595); the Burroughs arms map 10061 and pass
