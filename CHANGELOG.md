@@ -25,6 +25,40 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **A component sends and receives UDP datagrams: `wasi:sockets@0.3`'s whole `udp-socket`**
+  ([#1376](https://github.com/scttfrdmn/burroughs/issues/1376), E3 of the v0.16.0 plan
+  [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0140). The grant is `ComponentConfig.InheritNetwork`
+  and `--inherit-network`, as it is for TCP (Changed, below), and nothing public is added.
+  - **What is served:** all fifteen functions. These are create by address family, `bind`, `connect` and `disconnect`,
+    `send` and `receive` through either lower, the local and remote address getters, the address family, the unicast
+    hop limit, and both buffer sizes. Ungranted, `create` is `access-denied`, wasmtime 49.0.3's reading with no network
+    flag and TCP's point. Bind, connect, send and receive each check the grant again.
+  - **The OS socket is made at the bind,** explicit or implicit (the first `connect` or `send`). An option set before
+    the bind is recorded and applied then, and one read before it comes from a probe socket. `connect` is the OS's
+    connect, so the kernel filters what arrives, surfaces ICMP's `connection-refused`, and picks the local address.
+    `disconnect` is a connect to `AF_UNSPEC`. `SO_BROADCAST`, which Go's `net` sets, is cleared.
+  - **send resolves inline.** A datagram over 65535 bytes is `datagram-too-large` before the kernel is asked, wasmtime's
+    bound, and a list past the end of memory traps at the lift.
+  - **receive is served by one reader per socket,** started on demand. It serves the pending receives in order. It
+    holds a datagram read while none was waiting for the next receive, so a cancelled receive takes nothing. A
+    connected socket's receive returns only its peer's datagrams, as the WIT promises. Close closes every socket and
+    waits its reader out.
+  - **Witnesses:** every one of `udp.wasm`'s 49 rows passes with `gate:cm-threads` off and on, plain and under `-race`
+    (`udp.reading`, 10 of 10 per row). 47 are wasmtime 49.0.3's readings, the ungranted `create` among them, and two
+    are ADR 0140's departures. Five rows read darwin's kernel, are marked so, and are compared on darwin only.
+    `p3udp`, a Rust std `UdpSocket` guest built offline, matches wasmtime's granted and no-flag readings
+    (`p3udp.reading`, `p3udp-denied.reading`), and so do Run, LoadComponent and `burroughs run --inherit-network`. Go's
+    `ListenUDP`, `DialUDP`, `ReadFrom`, `WriteTo`, `Read`, `Write` and `LocalAddr` are the `dial-v4` and `dial-v6` rows'
+    calls, over IPv4 and IPv6 loopback, for the fork's F13 ([#1379](https://github.com/scttfrdmn/burroughs/issues/1379)).
+    No socket goroutine survives Close.
+  - **Named departures from wasmtime, each a row of its own:**
+    - an async cancel of a pending receive resolves at the cancel, where wasmtime's returns BLOCKED first;
+    - a connected socket does not return a datagram from another socket that was queued before the connect, where
+      wasmtime does. That row is the WIT's text.
+  - **Named limits:** a send blocks its agent if the kernel cannot take the datagram at once. On Windows, Go's `net`
+    turns ICMP errors off, so a receive after a send to a closed port waits. Linux's and Windows' readings are
+    unmeasured, and disconnect is `not-supported` on the BSDs but darwin.
+
 - **A component serves HTTP: `Component.Handler()` and `burroughs serve`, `wasi:http@0.3`'s incoming half**
   ([#1385](https://github.com/scttfrdmn/burroughs/issues/1385), E2-in-b of the v0.16.0 plan
   [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0137). **Public API**, on Scott's ruling on
@@ -240,6 +274,11 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **`ComponentConfig.InheritNetwork` and `--inherit-network` grant UDP as well as TCP.** This is a public-API
+  documentation change, on Scott's ruling on [#1376](https://github.com/scttfrdmn/burroughs/issues/1376): *"UDP rides
+  the existing network grant … No new field or flag is added."* The field's doc comment, the type's documentation, and
+  the flag's help for `run` and `serve` now say *TCP and UDP*. An embedder who already grants TCP now grants UDP too,
+  as wasmtime's `-S inherit-network` does. A separate UDP grant, and requiring both, were ruled against (ADR 0140).
 - **The contract gains v0.16.0's §6 R-5 append, for serving `wasi:http` from a Go guest**
   ([#1382](https://github.com/scttfrdmn/burroughs/issues/1382), on Scott's stamp of 2026-11-24; ruling 4 on
   [#1375](https://github.com/scttfrdmn/burroughs/issues/1375); the plan is

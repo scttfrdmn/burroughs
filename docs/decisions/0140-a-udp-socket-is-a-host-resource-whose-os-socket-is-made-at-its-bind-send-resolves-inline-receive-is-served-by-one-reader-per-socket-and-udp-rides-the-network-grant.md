@@ -98,8 +98,8 @@ wasmtime 49.0.3 (`.oracle/wasmtime-49.0.3/wasmtime`, never the 50.0.1 on PATH), 
   - otherwise the socket is bound implicitly if it is not yet bound. A connected socket is disconnected first, as the WIT's implementors' note asks, then `syscall.Connect`s.
   - On success, the peer is recorded. On failure, the socket is left unconnected, with the error mapped.
 - **`disconnect`** of a socket that is not connected is `invalid-state`. Otherwise it is a `connect` to `AF_UNSPEC`:
-  - **on darwin and Linux, a raw `SYS_CONNECT`** (`udpDisconnect`, the one `unsafe` use in this package), with darwin's `EAFNOSUPPORT` and `EINVAL` read as success, as wasmtime reads them (darwin dissolves the association before it refuses the address, measured natively);
-  - **on Windows, a `connect` to the all-zero address**, which Winsock's documentation names as a disconnect;
+  - **on darwin and Linux, a raw `SYS_CONNECT`** (`osDisconnect`, the package's only use of `unsafe`), with darwin's `EAFNOSUPPORT` and `EINVAL` read as success (darwin dissolves the association before it refuses the address, measured natively with Go's `net`);
+  - **on Windows, a `connect` to the all-zero address**, which Winsock's documentation names as a disconnect (unmeasured: no Windows host was used);
   - elsewhere, `not-supported`.
 - **The local address is the kernel's `getsockname`,** read at the call, because a connect and a disconnect move it. The remote address is the recorded peer, and `invalid-state` when the socket is not connected.
 
@@ -112,7 +112,7 @@ wasmtime 49.0.3 (`.oracle/wasmtime-49.0.3/wasmtime`, never the 50.0.1 on PATH), 
   4. the given address's refusals, which are connect's;
   5. a connected socket sending to another address is `invalid-argument`, and an unconnected socket sending with no address is `invalid-argument`;
   6. the implicit bind.
-- **Then a connected socket `Write`s, and an unconnected one `WriteToUDPAddrPort`s.** On darwin, a `sendto` with an address on a connected socket is `EISCONN`, so the connected arm never passes one.
+- **Then a connected socket `Write`s, and an unconnected one `WriteToUDPAddrPort`s.** POSIX lets a kernel refuse a `sendto` with an address on a connected socket (`EISCONN`), so the connected arm never passes one.
 
 ### receive
 
@@ -181,6 +181,48 @@ The reader is the one receive site, authorised by this ADR in the census:
     - a datagram longer than 65535 bytes, which only an IPv6 jumbogram could carry (the reader's buffer truncates it);
     - multicast;
     - a send that the kernel's queue makes wait.
+
+## The build, as measured
+
+On darwin/arm64, in the worktree of #1376's branch. The readings were committed before the engine code, in the two commits after this ADR's.
+
+- **`TestUDPMatchesWasmtime`** (`internal/component/hostudp_test.go`, over `testdata/udp.wat`): all 49 read rows, with `gate:cm-threads` off and on, plain and under `-race`.
+  - 47 are wasmtime 49.0.3's readings, the `denied` row's no-flag reading among them. `cancel` and `connect-after-arrival` are this ADR's departures, and `connect-after-arrival`'s value is the WIT's text.
+  - The five darwin rows are asked on darwin only, and `refused` is not asked on Windows.
+  - No socket goroutine survived any row's Close.
+  - **The first run of the rows passed every row.**
+- **`TestP3UdpMatchesWasmtime`:** both readings, in both gate states.
+- **Unit witnesses:** `TestCloseEndsAGuestParkedInUDPReceive` (also under `-race`), `TestEveryUDPOperationChecksTheGrant`, `TestEveryUDPSocketHasNoBroadcast`, `TestAHeldDatagramFromAnotherIsDroppedAtConnect`, `TestACancelledReceiveTakesNothing` and `TestReceivesAreServedInOrder`.
+- **At the public boundary:** `TestInheritNetworkGrantsUDPOnBothConfiguredPaths` (Run and LoadComponent, granted and not). **At the CLI:** `TestRunAComponentWithInheritNetworkUsesUDP`.
+- **Two clarifications of the choice above**, neither a change to it:
+  - bind maps `EAFNOSUPPORT` to `invalid-argument`, the WIT's bind list, beside `EADDRNOTAVAIL`;
+  - `SO_BROADCAST` is cleared on every socket a bind makes. A probe's socket, which sends nothing, keeps Go's default.
+- **What the neuters showed** (each run, each reverted; the full list is at the sites as `NEUTER, run:` comments):
+  - **The grant at create is the denial a guest meets.** Dropped, the `denied` row reads both creates ok. p3udp's denied run passes, since bind's own check answers. The four checks past create are reachable only by withdrawing the grant from a live socket, so their witness is the unit test, and every fixture row passes under them.
+  - **The 65535-byte bound is the host's on darwin.** Dropped, `sizes-64k`'s two IPv6 sends of 65536 and 65537 bytes are sent.
+  - **The address conversions each have rows.** IPv6 segments decoded little-endian fail `bind-v6`, `sendto-v6`, `dial-v6` and `max-v6`. `getsockname`'s IPv6 address dropped fails `bind-v6`, and leaves `sendto-v6`, `dial-v6` and `max-v6` waiting at the hang guard.
+  - **The reader's delivery is every receive's.** Its resolve dropped, every sampled receive row waits at the guard. Its order (`TestReceivesAreServedInOrder`), its held datagram (`TestACancelledReceiveTakesNothing`) and connect's drop of a held datagram (`TestAHeldDatagramFromAnotherIsDroppedAtConnect`) each have only their unit witness:
+    - no row has two receives pending;
+    - **the `cancel` row's next receive usually reaches the socket while the reader is still reading**, so the reader delivers to it directly;
+    - no row holds a datagram at a connect.
+  - **The connected filter is `connect-after-arrival`'s.** Dropped, the row reads wasmtime's value.
+  - **The cancel's claim is `cancel`'s.** Dropped, the row waits at the guard.
+  - **Close's stop of the UDP sockets is the parked receive's.** Dropped, `TestCloseEndsAGuestParkedInUDPReceive`'s Close hangs. Every row passes, because Close's destructor of every own closes a socket no receive keeps lent.
+  - **Options:**
+    - the probe, dropped, fails `hop-limit`, `hop-defaults`, `rbuf` and `sbuf`;
+    - the bind's application of the recorded options fails `options-carry`'s hop limit, while its receive-buffer half is vacuous here (darwin's default is already past 65536).
+  - **disconnect, the live local address, send's two state refusals, and the remote-address refusals** each fail rows of their own.
+  - **`SO_BROADCAST`'s clear** fails its unit witness. The `broadcast` row was deliberately not run under that neuter, since it would put a datagram for 255.255.255.255 on the network.
+  - **Vacuous, and said so at their sites:**
+    - connect's disconnect before a reconnect, since darwin's connect replaces the association itself;
+    - the reader's copy of a datagram out of its buffer, by construction;
+    - the IPv4-mapped refusal of a remote address, which darwin's kernel makes itself;
+    - `options-carry`'s receive-buffer half.
+- **Found in the slice and repaired:**
+  - **the `refused` row, and p3udp's closed-port line, bound their sender after giving the closed port back.** A `-race` run of the package caught the kernel handing the sender that port, so it connected to itself and received its own datagram, and the row read ok where wasmtime reads `connection-refused`. Both now bind the sender first, in a fixture commit of its own before the engine's. Every row was read again on wasmtime, 10 of 10, and p3udp was rebuilt and re-read, all with the same readings;
+  - the row harness closed a row's instance only when the row passed, so a row that failed its guard left its reader to fail every later row's goroutine check;
+  - the grant test's bind asked for port 9, which darwin's kernel answered `access-denied` itself, so the bind's assertion held under its neuter. It asks for port 0.
+- **A residual, named rather than repaired:** the `refused` row's closed port, like p3udp's and like TCP's closed-port rows, is a port the test bound and gave back. Another process on the host can take it in between, and the row then waits at its guard.
 
 ## Rollback
 

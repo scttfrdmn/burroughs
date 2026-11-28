@@ -129,14 +129,15 @@ type sockDial struct {
 }
 
 // hostNet is one component instance's sockets: its live connections, listeners, pending dials and pending name
-// lookups (ADR 0126), and every socket goroutine it has started. It lives in the instance's hostResources, so a
-// nested instance has its own.
+// lookups (ADR 0126), its UDP sockets that have an OS socket (ADR 0140), and every socket goroutine it has started. It
+// lives in the instance's hostResources, so a nested instance has its own.
 type hostNet struct {
 	mu        sync.Mutex
 	conns     map[*sockConn]struct{}
 	listeners map[*sockListener]struct{}
 	dials     map[*sockDial]struct{}
 	lookups   map[*nameLookup]struct{}
+	udps      map[*udpSocket]struct{}
 	stopped   bool
 	wg        sync.WaitGroup
 }
@@ -144,8 +145,27 @@ type hostNet struct {
 func newHostNet() *hostNet {
 	return &hostNet{
 		conns: map[*sockConn]struct{}{}, listeners: map[*sockListener]struct{}{}, dials: map[*sockDial]struct{}{},
-		lookups: map[*nameLookup]struct{}{},
+		lookups: map[*nameLookup]struct{}{}, udps: map[*udpSocket]struct{}{},
 	}
+}
+
+// adoptUDP registers a UDP socket whose OS socket its bind has just made, so Close can close it (ADR 0140). After
+// stop it is refused, and the caller closes the OS socket. The caller may hold the socket's lock, the permitted order.
+func (n *hostNet) adoptUDP(s *udpSocket) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.stopped {
+		return false
+	}
+	n.udps[s] = struct{}{}
+	return true
+}
+
+// forgetUDP removes a UDP socket its destructor has closed.
+func (n *hostNet) forgetUDP(s *udpSocket) {
+	n.mu.Lock()
+	delete(n.udps, s)
+	n.mu.Unlock()
 }
 
 // startLookup registers a pending name lookup and counts its goroutine, startDial's shape.
@@ -357,7 +377,20 @@ func (n *hostNet) stop() {
 	n.listeners = map[*sockListener]struct{}{}
 	lookups := n.lookups
 	n.lookups = map[*nameLookup]struct{}{}
+	udps := n.udps
+	n.udps = map[*udpSocket]struct{}{}
 	n.mu.Unlock()
+	// Every UDP socket is closed, which ends its reader's ReadFrom, and each receive still pending is dropped with its
+	// lend released, resolving nothing, as a dial is (ADR 0140). Each socket's lock is taken with the registry's
+	// released: the order is udpSocket.mu → hostNet.mu.
+	//
+	// NEUTER, run: skip this stop, and TestCloseEndsAGuestParkedInUDPReceive's Close does not return within the hang
+	// guard, waiting for the reader its pending receive keeps lent. TestUDPMatchesWasmtime passes under it: no row ends
+	// with a receive pending, so Close's destructor of every own closes each socket. (TestP3UdpMatchesWasmtime, run after
+	// it, failed on the reader that test leaked, not on its own.)
+	for s := range udps {
+		s.stop()
+	}
 	// NEUTER: skip the listeners' close, and TestCloseEndsAGuestParkedInAccept's Close hangs, waiting for an Accept
 	// that never returns.
 	for _, sl := range lns {
@@ -548,8 +581,19 @@ func socketAddressValue(ap netip.AddrPort) (canon.Value, error) {
 // fields as def:flatten_type lays them out, every word an i32 (ipv4: port, four octets; ipv6: port, flow-info,
 // eight segments, scope-id). op names the method whose argument it is, connect's or bind's, for the messages.
 func decodeSocketAddress(op string, w []interp.Value) (family int, ap netip.AddrPort, err error) {
+	return decodeSocketAddressOf("tcp-socket."+op, w)
+}
+
+// decodeSocketAddressOf is decodeSocketAddress for any method, named in full in the messages: a udp-socket's too
+// (ADR 0140).
+//
+// NEUTER, run: read the ipv6 segments little-endian, and TestUDPMatchesWasmtime's bind-v6, sendto-v6, dial-v6 and max-v6
+// rows fail in both gate states: ::1 decodes as 100::, so bind-v6 reads address-not-bindable (0x00008586), and
+// TestP3UdpMatchesWasmtime's granted runs differ at the v6 lines. Every ipv4 row passes, and so do bind-refusals'
+// and bind-more's ipv6 refusals, which the host makes before the address is used.
+func decodeSocketAddressOf(name string, w []interp.Value) (family int, ap netip.AddrPort, err error) {
 	if len(w) != 12 {
-		return 0, netip.AddrPort{}, fmt.Errorf("component: tcp-socket.%s: an ip-socket-address is 12 flat words, got %d", op, len(w))
+		return 0, netip.AddrPort{}, fmt.Errorf("component: %s: an ip-socket-address is 12 flat words, got %d", name, len(w))
 	}
 	word := func(i int) uint32 { return uint32(w[i].Bits) }
 	switch word(0) {
@@ -567,7 +611,7 @@ func decodeSocketAddress(op string, w []interp.Value) (family int, ap netip.Addr
 		}
 		return familyIPv6, netip.AddrPortFrom(a, uint16(word(1))), nil
 	default:
-		return 0, netip.AddrPort{}, &interp.Trap{Reason: fmt.Sprintf("tcp-socket.%s: ip-socket-address case %d out of range", op, word(0))}
+		return 0, netip.AddrPort{}, &interp.Trap{Reason: fmt.Sprintf("%s: ip-socket-address case %d out of range", name, word(0))}
 	}
 }
 

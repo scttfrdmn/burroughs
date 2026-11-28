@@ -247,6 +247,17 @@ func TestEveryEngineGoroutineIsAtASiteADecisionAuthorises(t *testing.T) {
 				"makes prompt by cancelling its context, and Close waits it out " +
 				"(`TestCloseEndsAPendingLookupAndItsGoroutine`, under -race).",
 		},
+		{"internal/component/hostudp.go", "(*Host).udpReceive"}: {
+			count: 1,
+			by: "ADR 0140 — a wasi:sockets udp-socket's reader, at most one per socket, started by a receive when " +
+				"none is running and counted in the instance's socket registry before it starts. It runs NO guest code " +
+				"and touches no guest memory: it reads one datagram at a time with no lock held, hands each to the " +
+				"socket's first pending receive, whose `onResolve` stores it, ADR 0101's discipline (ADR 0095's " +
+				"precedent), and holds one for the next receive when none is waiting. One claim decides who resolves a " +
+				"receive: the reader's delivery, the guest's cancel, or Close. It ends when no receive is pending, or " +
+				"when the socket is closed; Close closes every UDP socket so the ReadFrom returns, and waits it out " +
+				"(`TestCloseEndsAGuestParkedInUDPReceive`, under -race).",
+		},
 	}
 
 	seen := map[site]int{}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -80,6 +81,42 @@ func TestRunAComponentWithInheritNetworkConnects(t *testing.T) {
 			port, closed := echoPeer(t)
 			var out, errBuf bytes.Buffer
 			argv := append(append([]string{"run"}, c.flags...), p3tcp, "--", port, closed)
+			if code := dispatch(&out, &errBuf, argv); code != exitOK {
+				t.Fatalf("exited %d, want 0\nstderr: %q", code, errBuf.String())
+			}
+			if want := readingStdout(t, c.reading); out.String() != want {
+				t.Errorf("stdout = %q, want wasmtime's %q", out.String(), want)
+			}
+		})
+	}
+}
+
+// TestRunAComponentWithInheritNetworkUsesUDP is `--inherit-network`'s UDP half at the CLI (ADR 0140, Scott's ruling on
+// #1376: the flag grants TCP and UDP): `burroughs run --inherit-network p3udp.wasm` exits 0 with wasmtime 49.0.3's `-S
+// inherit-network` reading, and without the flag with its no-flag reading, `bind: PermissionDenied`. The granted row is
+// not asked on Windows, where p3udp's closed-port receive waits for an ICMP error Go's net turns off.
+//
+// NEUTER, run: runComponent not passing the flag to ComponentConfig.InheritNetwork, and the granted row prints the
+// denied reading, `p3udp: bind: PermissionDenied`, and nothing more.
+func TestRunAComponentWithInheritNetworkUsesUDP(t *testing.T) {
+	t.Setenv("BURROUGHS_COMPONENTS", "")
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	const p3udp = "../../internal/component/testdata/p3udp/p3udp.wasm"
+	for _, c := range []struct {
+		name    string
+		flags   []string
+		reading string
+	}{
+		{"granted", []string{"--inherit-network"}, "../../internal/component/testdata/p3udp.reading"},
+		{"denied", nil, "../../internal/component/testdata/p3udp-denied.reading"},
+	} {
+		if c.flags != nil && runtime.GOOS == "windows" {
+			t.Logf("%s: not asked on windows (Go's net disables SIO_UDP_CONNRESET, so the closed-port receive waits)", c.name)
+			continue
+		}
+		t.Run(c.name, func(t *testing.T) {
+			var out, errBuf bytes.Buffer
+			argv := append(append([]string{"run"}, c.flags...), p3udp)
 			if code := dispatch(&out, &errBuf, argv); code != exitOK {
 				t.Fatalf("exited %d, want 0\nstderr: %q", code, errBuf.String())
 			}

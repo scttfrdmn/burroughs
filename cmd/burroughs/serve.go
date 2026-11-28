@@ -56,7 +56,8 @@ func serve(stdout, stderr io.Writer, argv []string, stop <-chan os.Signal) error
 		"as for run")
 	var scratch scratchFlag
 	fs.Var(&scratch, "scratch", "grant the component a WRITABLE directory as HOST[:/GUEST] (repeatable), as for run")
-	inheritNetwork := fs.Bool("inherit-network", false, "grant the component wasi:sockets TCP to any address, as for run")
+	inheritNetwork := fs.Bool("inherit-network", false, "grant the component wasi:sockets TCP and UDP to any address, "+
+		"as for run")
 	allowNameLookup := fs.Bool("allow-ip-name-lookup", false, "grant the component wasi:sockets/ip-name-lookup, as "+
 		"for run")
 	fs.Usage = func() {
