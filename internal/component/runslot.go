@@ -214,6 +214,28 @@ func (h *asyncHandles) leaveHost(a *cmThread) {
 	h.mu.Unlock()
 }
 
+// afterHost runs f as the in-host window of the host code c is running closes: queued with the window's result
+// stores, which leaveHost applies on c's goroutine once its outermost host call ends, with h.mu released, or run at once
+// when c is in no window, as a test's direct call of an impl is (#1414). It is for an impl that starts work whose
+// resolution must not land inside its own window: one that did was queued, and leaveHost applied it before the async
+// lower read whether the subtask had resolved, so the lower returned RETURNED for a callee meant to return STARTED.
+// After the window closes, such a resolution waits for the run slot its caller holds (`onResolve`), so it lands after
+// the lower has returned. The caller holds no engine lock.
+//
+// **The agent's own window in a free instance** (ADR 0130) is closed the same way, but there a resolution takes no
+// slot, so one can still land between leaveHost and the lower's read.
+func (h *asyncHandles) afterHost(c *interp.CanonCaller, f func()) {
+	agent := h.freeAgentOf(c)
+	h.mu.Lock()
+	if win := h.windowLocked(agent); win.inHost > 0 {
+		win.hostStores = append(win.hostStores, f)
+		h.mu.Unlock()
+		return
+	}
+	h.mu.Unlock()
+	f()
+}
+
 // releaseRunFor undoes one acquireRun by chain `ch`: a nested entry only drops the depth, and the last one
 // gives the slot up. The state is cleared under the lock and the channel operation is after it (§4
 // B-MM-3: no engine lock across a channel operation).

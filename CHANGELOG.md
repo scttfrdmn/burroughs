@@ -313,6 +313,15 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A UDP receive whose datagram has already arrived returns STARTED every time, as wasmtime 49.0.3's does**
+  ([#1414](https://github.com/scttfrdmn/burroughs/issues/1414), ADR 0140). The socket's reader was started inside the
+  receive impl's host window. On Linux the reader could read a queued datagram and resolve before that window closed,
+  so the async lower returned RETURNED: `queued-status` failed twice on PR #1412's CI. The reader now starts as the
+  window closes (`asyncHandles.afterHost`), and its resolution waits for the run slot the caller holds.
+  - In a Linux container `queued-status` read STARTED in 400 of 400 runs, plain and under `-race`; it read STARTED in
+    400 of 400 on darwin too.
+  - With the old start restored, it read RETURNED in 35 of 400 runs under `-race` in the container.
+  - Still racy in a free instance (`gate:cm-shared-memory`), whose resolutions take no slot.
 - **Close ends a deadlock between two instances' run slots, and `HTTPServer.Close`'s let-go waits only until its
   deadline** ([#1398](https://github.com/scttfrdmn/burroughs/issues/1398), ADR 0139).
   - **Which waits now end at Close.** A callback task's entry and a sync lift's call waiting for a run slot end at

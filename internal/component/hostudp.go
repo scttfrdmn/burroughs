@@ -692,14 +692,14 @@ func (s *udpSocket) send(h *Host, data []byte, has bool, toFam int, to netip.Add
 // udpReceive is `[method]udp-socket.receive: async func() -> result<tuple<list<u8>, ip-socket-address>, error-code>`,
 // its one flat parameter self (ADR 0140). In order: the grant; a socket that is not bound is `invalid-state`; a held
 // datagram is the result, inline; otherwise the receive is pending, holds its lend of self, and counts in sockPending
-// as a waker, and the socket's reader is started if it is not running. It returns STARTED, as wasmtime 49.0.3 does even
-// for a datagram that has arrived (udp.reading's queued-status).
+// as a waker, and the socket's reader is started, if it is not running, as the impl's host window closes. It returns
+// STARTED, as wasmtime 49.0.3 does even for a datagram that has arrived (udp.reading's queued-status, #1414).
 //
 // The reader is a goroutine of its own, the one receive site, authorised by ADR 0140 in the census
 // (TestEveryEngineGoroutineIsAtASiteADecisionAuthorises). It runs no guest code, and its result reaches the guest
 // through onResolve, ADR 0101's discipline. It ends when no receive is pending, or when the socket is closed.
 func (h *Host) udpReceive(async *asyncHandles, res *hostResources) asyncLowerImpl {
-	return func(_ *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
+	return func(c *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
 		args := onStart()
 		if len(args) != 1 {
 			return nil, fmt.Errorf("component: udp-socket.receive: got %d flat parameters, want 1 (self)", len(args))
@@ -765,10 +765,23 @@ func (h *Host) udpReceive(async *asyncHandles, res *hostResources) asyncLowerImp
 		conn := sock.conn
 		sock.mu.Unlock()
 		if ended != nil {
-			go func() {
-				defer ended()
-				sock.read(conn)
-			}()
+			// **The reader starts as the impl's host window closes, never inside it** (#1414). A resolution that arrives
+			// while the window is open is queued and applied by leaveHost before the lower reads whether the subtask has
+			// resolved, so a reader that read a datagram already in the kernel's queue made the lower return RETURNED,
+			// where wasmtime 49.0.3 always returns STARTED. Started from the window's queue instead, the reader's first
+			// resolution finds the window closed and waits for the run slot, which the caller holds until the lower has
+			// returned STARTED. Outside any window (a test's direct call), it starts at once.
+			//
+			// NEUTER, run in a Linux container: start the reader here at once, as before #1414, and
+			// TestUDPMatchesWasmtime's queued-status reads 0x01000200 (RETURNED) in 35 of 400 runs under -race (200 per
+			// gate state: 14 with cm-threads off, 21 on), and in none of 2400 plain runs there; unmodified main had read it
+			// in 1 of 400 plain. With the reader started here, 0 of 400 under -race and 0 of 2400 plain.
+			async.afterHost(c, func() {
+				go func() {
+					defer ended()
+					sock.read(conn)
+				}()
+			})
 		}
 		return r.cancelSubtask(sock), nil
 	}
