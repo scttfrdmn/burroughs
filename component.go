@@ -129,9 +129,9 @@ func resolveFeatures(fs []Feature) (bin.Features, error) {
 // `get-flags`, `get-type`, `read-via-stream` and `write-via-stream`; every other descriptor method is
 // refused by name at its call.
 //
-// Two fields this has and a [WASIP1Config] does not: InheritNetwork, the grant of WASI 0.3's TCP sockets
-// (ADR 0123), and AllowNameLookup, the grant of its name lookup (ADR 0126). Each zero value denies, so a
-// configuration that names neither grants no network and no lookup.
+// Two fields this has and a [WASIP1Config] does not: InheritNetwork, the grant of WASI 0.3's TCP and UDP
+// sockets (ADR 0123, ADR 0140), and AllowNameLookup, the grant of its name lookup (ADR 0126). Each zero value
+// denies, so a configuration that names neither grants no network and no lookup.
 //
 // **AllowHTTP** grants `wasi:http/client@0.3`'s `send`, an outgoing HTTP request over Go's `net/http` (ADR 0135),
 // as wasmtime's `-S http` does. Its zero value denies the call and not the link: a component that imports
@@ -150,7 +150,7 @@ type ComponentConfig struct {
 	// refused by name rather than ignored.
 	Features []Feature
 
-	InheritNetwork  bool // wasi:sockets TCP may reach any address; false, the default, denies the network
+	InheritNetwork  bool // wasi:sockets TCP and UDP may reach any address; false, the default, denies the network
 	AllowNameLookup bool // wasi:sockets/ip-name-lookup.resolve-addresses; false, the default, denies it
 	AllowHTTP       bool // wasi:http/client.send; false, the default, answers HTTP-request-denied at the call
 

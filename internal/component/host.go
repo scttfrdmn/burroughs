@@ -93,8 +93,9 @@ type Host struct {
 	Args     []string // the guest's argv, lowered by get-arguments
 	Exited   bool
 	ExitCode int32
-	// InheritNetwork grants wasi:sockets TCP any address (ADR 0123), wasmtime's `-S inherit-network`. False, the
-	// zero value, denies the network: `tcp-socket.create` answers `access-denied`.
+	// InheritNetwork grants wasi:sockets TCP and UDP any address (ADR 0123; ADR 0140, by Scott's ruling on #1376),
+	// wasmtime's `-S inherit-network`. False, the zero value, denies the network: `tcp-socket.create` and
+	// `udp-socket.create` answer `access-denied`.
 	InheritNetwork bool
 	// AllowNameLookup grants wasi:sockets/ip-name-lookup.resolve-addresses (ADR 0126), wasmtime's `-S
 	// allow-ip-name-lookup`. False, the zero value, denies it: every name is `permanent-resolver-failure`, the code
@@ -454,9 +455,10 @@ func (h *Host) resourceSource() hostResourceSource {
 	// TestP3SysMatchesWasmtime are refused at instantiate, naming get-terminal-stdin's terminal-input.
 	serve(types, wasiP3, "wasi:cli/terminal-input::terminal-input", terminalInputResource)
 	serve(types, wasiP3, "wasi:cli/terminal-output::terminal-output", terminalOutputResource)
-	// wasi:sockets' TCP socket (ADR 0123, hostsock.go). UDP's is not declared, so a guest's drop of one keeps
-	// dropNoop, as it did: nothing mints one.
+	// wasi:sockets' TCP socket (ADR 0123, hostsock.go) and UDP socket (ADR 0140, hostudp.go). UDP's was not declared
+	// until ADR 0140, and a guest's drop of one met dropNoop.
 	serve(types, wasiP3, "wasi:sockets/types::tcp-socket", tcpSocketResource)
+	serve(types, wasiP3, "wasi:sockets/types::udp-socket", udpSocketResource)
 
 	m := map[string]resourceMethod{}
 	// The stdio getters mint an own of their stream (def:lower_own), built at the call so a Stdout set
@@ -484,6 +486,20 @@ func (h *Host) resourceSource() hostResourceSource {
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.get-remote-address", method(tcpSocketResource, h.tcpGetRemoteAddress))
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.get-address-family", method(tcpSocketResource, h.tcpGetAddressFamily))
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.get-is-listening", method(tcpSocketResource, h.tcpGetIsListening))
+	// udp-socket's thirteen sync functions (ADR 0140, hostudp.go). send and receive are async (asyncSource).
+	serve(m, wasiP3, "wasi:sockets/types::[static]udp-socket.create", h.udpCreate)
+	serve(m, wasiP3, "wasi:sockets/types::[method]udp-socket.bind", method(udpSocketResource, h.udpBind))
+	serve(m, wasiP3, "wasi:sockets/types::[method]udp-socket.connect", method(udpSocketResource, h.udpConnect))
+	serve(m, wasiP3, "wasi:sockets/types::[method]udp-socket.disconnect", method(udpSocketResource, h.udpDisconnect))
+	serve(m, wasiP3, "wasi:sockets/types::[method]udp-socket.get-local-address", method(udpSocketResource, h.udpGetLocalAddress))
+	serve(m, wasiP3, "wasi:sockets/types::[method]udp-socket.get-remote-address", method(udpSocketResource, h.udpGetRemoteAddress))
+	serve(m, wasiP3, "wasi:sockets/types::[method]udp-socket.get-address-family", method(udpSocketResource, h.udpGetAddressFamily))
+	serve(m, wasiP3, "wasi:sockets/types::[method]udp-socket.get-unicast-hop-limit", method(udpSocketResource, h.udpGetHopLimit))
+	serve(m, wasiP3, "wasi:sockets/types::[method]udp-socket.set-unicast-hop-limit", method(udpSocketResource, h.udpSetHopLimit))
+	serve(m, wasiP3, "wasi:sockets/types::[method]udp-socket.get-receive-buffer-size", method(udpSocketResource, h.udpGetBufferSize(udpOptRecvBuffer)))
+	serve(m, wasiP3, "wasi:sockets/types::[method]udp-socket.set-receive-buffer-size", method(udpSocketResource, h.udpSetBufferSize(udpOptRecvBuffer)))
+	serve(m, wasiP3, "wasi:sockets/types::[method]udp-socket.get-send-buffer-size", method(udpSocketResource, h.udpGetBufferSize(udpOptSendBuffer)))
+	serve(m, wasiP3, "wasi:sockets/types::[method]udp-socket.set-send-buffer-size", method(udpSocketResource, h.udpSetBufferSize(udpOptSendBuffer)))
 
 	// WASI 0.3's preopens (ADR 0133, hostfs.go): each call mints an own<descriptor> per granted directory, so it is
 	// here rather than in wasi(), as tcp-socket.create is. 0.2's stays in wasi(), an empty list.

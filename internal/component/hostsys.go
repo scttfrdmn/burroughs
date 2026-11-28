@@ -105,7 +105,8 @@ func (h *Host) monotonicNow(_ *interp.CanonCaller, args []interp.Value) ([]inter
 func (h *Host) mark() uint64 { return uint64(time.Since(h.start).Nanoseconds()) }
 
 // asyncSource is the production async imports (#1233, ADR 0121), WASI 0.3's two waits, tcp-socket's connect
-// (ADR 0123), name lookup (ADR 0126) and descriptor's async methods (ADR 0133, ADR 0138), registered for 0.3 only. Each is a factory the walk calls with the
+// (ADR 0123), udp-socket's send and receive (ADR 0140), name lookup (ADR 0126) and descriptor's async methods (ADR
+// 0133, ADR 0138), registered for 0.3 only. Each is a factory the walk calls with the
 // importing instance's async and resource tables, which hold the work while it is pending, so that instance's
 // Close stops it. A sync lower of any of them is the blocking sync lower (ADR 0126).
 func (h *Host) asyncSource() map[string]asyncImplFor {
@@ -115,6 +116,10 @@ func (h *Host) asyncSource() map[string]asyncImplFor {
 	// wasi:sockets' one async tcp method (ADR 0123, hostsock.go): a method, so its factory lends self from the
 	// instance's resource table.
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.connect", h.tcpConnect)
+	// udp-socket's two async methods (ADR 0140, hostudp.go): send resolves inline, and receive through the socket's
+	// reader, whose pending receives are the instance's socket registry's.
+	serve(m, wasiP3, "wasi:sockets/types::[method]udp-socket.send", h.udpSend)
+	serve(m, wasiP3, "wasi:sockets/types::[method]udp-socket.receive", h.udpReceive)
 	// wasi:sockets/ip-name-lookup's one function (ADR 0126, hostlookup.go), whose pending lookups are the
 	// instance's socket registry's.
 	serve(m, wasiP3, "wasi:sockets/ip-name-lookup::resolve-addresses", h.resolveAddresses)

@@ -370,9 +370,9 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	var envs envFlag
 	fs.Var(&envs, "env", "pass NAME[=VALUE] into the guest's environment (repeatable). NOTHING is "+
 		"passed unless named (#830); a bare NAME is refused when unset in this environment")
-	inheritNetwork := fs.Bool("inherit-network", false, "grant a component wasi:sockets TCP to any address, as "+
-		"wasmtime's -S inherit-network does. Without it a component's sockets are denied (ADR 0123); a wasip1 "+
-		"command or a core module refuses the flag")
+	inheritNetwork := fs.Bool("inherit-network", false, "grant a component wasi:sockets TCP and UDP to any address, "+
+		"as wasmtime's -S inherit-network does. Without it a component's sockets are denied (ADR 0123, ADR 0140); a "+
+		"wasip1 command or a core module refuses the flag")
 	allowNameLookup := fs.Bool("allow-ip-name-lookup", false, "grant a component wasi:sockets/ip-name-lookup, as "+
 		"wasmtime's -S allow-ip-name-lookup does. Without it every name a component resolves is refused (ADR 0126); "+
 		"a wasip1 command or a core module refuses the flag")

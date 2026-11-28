@@ -1,0 +1,30 @@
+The witness guest for E3 (#1376, ADR 0140) — provenance, per ADR 0114's rule for committed guest binaries. Like
+p3tcp, it is reproducible from this repository plus the pinned toolchain: p3udp/build.sh rebuilds it offline. It needs
+no peer.
+
+Source:       src/main.rs, Cargo.toml, Cargo.lock (this directory). No dependencies and no WIT of its own: its
+              imports are the ones Rust std and wasi-libc make for a wasm32-wasip3 program that uses UDP.
+Toolchain:    rustc 1.100.0-nightly (0fc141305 2026-09-11), target wasm32-wasip3, from
+              ~/.rustup/toolchains/nightly-aarch64-apple-darwin
+Validated:    wasm-tools 1.258.0, validate --features all
+Built on:     darwin/arm64, 2026-11-28
+
+  p3udp.wasm
+    build.sh   (cargo build --offline --locked --release --target wasm32-wasip3, in a scratch copy)
+    sha256: 933c2353e45c55d523f61c7b5d1322a8a478334d014e34cf562e9e800d61cd7e
+    bytes:  208376
+    The same sha256 on a second build. It replaces the first build (sha256 312c8e0e…13789, 208378 bytes), whose
+    closed-port line bound its sender after giving the closed port back, so the kernel could hand the sender that
+    port and have it connect to itself; the sender is now bound first. Both readings are unchanged, 10 of 10.
+    Its lowers of wasi:sockets/types@0.3.0 (wasm-tools print): [method]udp-socket.send and [method]udp-socket.receive
+    with the async option, memory and realloc; [static]udp-socket.create, bind, connect, the two address getters,
+    the hop limit's and the buffer sizes' getters and setters with no async option, with memory and realloc. It
+    lowers no disconnect and no get-address-family: std reaches neither. It cancels a subtask with the sync
+    subtask.cancel. Its `run` is async-typed and lifted with no async option.
+    wasmtime's trace of it (WASMTIME_LOG=wasmtime_wasi=trace) shows wasi-libc keeping a receive pending across the
+    read timeout and the nonblocking recv, and the next recv taking that receive's result: neither is cancelled.
+
+THE ORACLE: wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, never the wasmtime on PATH.
+build.sh writes its readings to ../p3udp.reading (`wasmtime run -S inherit-network p3udp.wasm`) and
+../p3udp-denied.reading (no network flag), with stdout and stderr to files. 10 of 10 runs of each gave the same stdout,
+an empty stderr and exit 0, which build.sh checks byte for byte before it writes the reading.
