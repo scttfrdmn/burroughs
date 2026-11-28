@@ -25,6 +25,31 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **A fork-built Go service serves HTTP under `burroughs serve`, reads its configuration from a `--dir` preopen, sends
+  outbound requests, and answers byte for byte as stock Go's does**
+  ([#1380](https://github.com/scttfrdmn/burroughs/issues/1380), C4). This is v0.16.0's witness, on the plan
+  [#1370](https://github.com/scttfrdmn/burroughs/issues/1370). It adds a witness, not a mechanism, and no gate flips.
+  - **The service is `p3svc`,** three sources in `internal/component/testdata/forkp3/` (`p3svc.go.txt` and its two
+    serve files). Its `net/http` handlers are served natively by `http.ListenAndServe`, and on the fork's `GOOS=wasip3`
+    by `wasihttp.Handle`, as `p3svc.wasm`. They read `app.conf` from the preopened `/config` on every request, list
+    the directory, and answer a missing file with 404. Through `http.DefaultTransport` they proxy a GET and a streamed
+    200,011-byte POST to a stock-Go peer, and answer a refused dial with 502. They also send 1 MiB.
+  - **The client** makes ten requests, rewrites `app.conf`'s greeting between two of them, and prints 46 lines. The
+    fork step's peer and client are in-test (`cmd/burroughs/c4svc_test.go`), and stock go1.26.9's print is
+    `p3svc.reading`. The fork step read it 30 of 30: native, wasmtime 49.0.3 `serve` and Burroughs `serve`, 10 of 10
+    each.
+  - **The witnesses.** `TestC4HostServerMatchesItsReading` builds the sources with the Go running the test, and
+    `TestC4BurroughsServeMatchesTheHostReading` runs `burroughs serve --dir DIR:/config --addr 127.0.0.1:0` three
+    times a test, waiting on its own `Serving HTTP on` line. Both match the reading byte for byte: 3 of 3 and 9 of 9
+    plain, and the same under `-race`. No goroutine a run starts outlives it. With no `--dir`,
+    `TestC4BurroughsServeWithNoDirAnswersNotExist` reads the fork step's no-dir stdout: line 1 is `GET /: status 500`,
+    and every route that reads the directory answers `not-exist`.
+  - **The neuters.** With the `--dir` grant not passed, each run reads the no-dir stdout from line 1. With serve's
+    outgoing HTTP grant off, it fails at line 18, `/proxy`'s 502 `peer: permission`. With the preopen's resolution
+    dropped, it fails at line 1 while `/files` still lists the grant. Two are vacuous and say so at their sites:
+    path arithmetic in place of `os.Root` (p3svc opens no path that leaves its grant), and reuse counted to
+    `task.return` (the client is sequential).
+
 - **A component sends and receives UDP datagrams: `wasi:sockets@0.3`'s whole `udp-socket`**
   ([#1376](https://github.com/scttfrdmn/burroughs/issues/1376), E3 of the v0.16.0 plan
   [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0140). The grant is `ComponentConfig.InheritNetwork`

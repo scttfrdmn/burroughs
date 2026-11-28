@@ -618,3 +618,46 @@ stderr empty, the server alive when the harness stopped it.
 No arm differs from another on any line. With no --dir, wasmtime and Burroughs read one stdout (one run each), whose first
 line that differs from the reading is its first, "GET /: status 500 \"500 Internal Server Error\"": every route that reads
 the directory answers 500 "...: not-exist", since a path under no preopen is ENOENT (F11).
+
+C4's in-tree arms (#1380), the Burroughs step: cmd/burroughs/c4svc_test.go. The fork step's peer and client are carried
+in-test, their output unchanged, and so is its scratch harness's writeConfig (the file, its sha256, the test's names):
+  p3svcpeer.go.txt    1b32d99bb8273576af61840a0741e7ab1e47b308c276587ebb2d9b928cb8cbd5  c4PeerMux, startC4Peer
+  p3svcclient.go.txt  d634d91a77d02b6d72cf1f2b535662987a5bd9ad92d32cca126108fe18aef41a  c4Client
+  p3svcrun.go.txt     ce6e31dd2436492b793c4c121d9158f6fc2c7a5e5d9cc7afd15fc7f64ca8922a  writeC4Config
+None of the three is committed as a file: their code is the test's. c4Client adds a hang guard to each request
+(c4Guard, 60 s, 240 s under -race), and a request it ends fails at its place rather than printing a kind.
+
+Darwin/arm64 (Apple M4 Pro), 2026-11-28, local, Burroughs daed9435 plus this slice's commits (engine files: comments
+only), GOTOOLCHAIN=go1.26.11:
+
+  N:  TestC4HostServerMatchesItsReading: the three sources, as p3svc.go, serve_native.go and serve_reactor.go beside
+      the go.mod above, built by the Go running the test (go1.26.11, -trimpath, CGO_ENABLED=0) and run as
+          p3svc -addr 127.0.0.1:<port> -config <dir>
+      readiness its port accepting a connection. p3svc.reading byte for byte, 3 of 3, and 3 of 3 under -race.
+  B:  TestC4BurroughsServeMatchesTheHostReading, in-process through serveCmd with BURROUGHS_ASYNC=1:
+          burroughs serve --dir <dir>:/config --addr 127.0.0.1:0 p3svc.wasm
+      readiness its own "Serving HTTP on http://ADDR/" line, the address read from it. Three runs a test, each with a
+      peer, a directory and a serve of its own: p3svc.reading byte for byte, 9 of 9, and 9 of 9 under -race; about
+      1.9 s a run, 22 s under -race. Every run: serve returned nil at its stop, wrote nothing to stdout and only its
+      address line to stderr, and left no goroutine the run started.
+  C:  TestC4BurroughsServeWithNoDirAnswersNotExist: the same with no --dir. 2459 bytes, sha256
+      d48397112b063e5efc6498e3671fbc1afa02b5415b62184807d7fc44674aa7d2, the fork step's no-dir reading by its first 16
+      digits; line 1 "GET /: status 500 ...", the eight responses that read the directory 500 "...: not-exist", and
+      /missing and /big the reading's lines. 3 of 3, and 3 of 3 under -race.
+
+The neuters, each a temporary edit, made and reverted with the editor, never committed, and each recorded at its site:
+  serve.go's Preopens without                B: each run the no-dir stdout, C's sha256, its first differing line line 1,
+  dirs.preopens() (--dir not passed):        "GET /: status 500 ...". C passes, as it must: it is the state made.
+  serve.go's AllowHTTP false:                B: each run at line 18, "GET /proxy: status 502 ...", body "peer:
+                                             permission\n"; /proxy-post 502 at line 24; /peer-down "permission\n" at
+                                             line 32. Lines 1 to 17 the reading's.
+  hostfs.go's openAt opening p with          B: each run at line 1, "GET /: status 500 ...", every open of app.conf
+  os.OpenFile (the grant's resolution        "config: not-exist", while /files at line 9 still lists the grant:
+  dropped):                                  2452 bytes, neither the reading nor C's.
+  openAt's own neuter, path arithmetic       vacuous: B 3 of 3. p3svc opens no path that leaves its grant.
+  for os.Root:
+  hostserve.go's release made in answered    vacuous: B 9 of 9, and 3 of 3 under -race: the client is sequential.
+  and not in finish (reuse counted to        TestAServedInstanceIsReusedOnlyAfterItsTaskExits failed under it, its
+  task.return, wasmtime's count):            GET /hello answered with the 500 page, as ADR 0137 records.
+  C given the grant (the test's own):        C: at line 1, "GET /: status 200 ...", at the eight directory
+                                             responses, and at its digest.

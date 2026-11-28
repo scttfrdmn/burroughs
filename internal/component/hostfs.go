@@ -556,7 +556,15 @@ func (d *fsDescriptor) openAt(pathFlags uint32, p string, oflags uint32, flags u
 	}
 	// NEUTER, run: open filepath.Join(d.dir.Name(), p) with os.OpenFile instead, path arithmetic for os.Root, and
 	// TestFSDescriptorMatchesWasmtime's escapes row reads 0x9e939e93, ../x and sub/../../x reaching outside the grant
-	// and finding nothing there (no-entry); its nested row reads 0x02000000, ../hello.txt opened from sub.
+	// and finding nothing there (no-entry); its nested row reads 0x02000000, ../hello.txt opened from sub. C4's
+	// TestC4BurroughsServeMatchesTheHostReading passes under it, 3 of 3, **vacuous there**: p3svc opens no path that
+	// leaves its grant, so arithmetic and os.Root resolve it alike (#1380).
+	//
+	// NEUTER, run: open p with os.OpenFile, the preopen's resolution dropped, so the guest's path resolves against the
+	// process's working directory, and C4's TestC4BurroughsServeMatchesTheHostReading fails in each run at line 1, `GET
+	// /: status 500 "500 Internal Server Error"`, every open of app.conf answering "config: not-exist". Its /files, at
+	// line 9, still lists the grant as the reading does: the fork's os.ReadDir of /config makes no open-at through
+	// this line (#1380).
 	f, err := d.dir.OpenFile(p, mode, 0o666)
 	if err != nil {
 		return nil, fsErrorLabel(err)

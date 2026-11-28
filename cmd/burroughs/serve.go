@@ -92,11 +92,20 @@ func serve(stdout, stderr io.Writer, argv []string, stop <-chan os.Signal) error
 		Stdout: stdout,
 		Stderr: stderr,
 		// NEUTER, run: drop this line, and TestServeAComponent's send row answers "send: err
-		// ErrorCode::HttpRequestDenied", where serve grants outgoing HTTP as wasmtime's does.
+		// ErrorCode::HttpRequestDenied", where serve grants outgoing HTTP as wasmtime's does. Set it false, and C4's
+		// TestC4BurroughsServeMatchesTheHostReading fails in each run at line 18, `GET /proxy: status 502 "502 Bad
+		// Gateway"` where the reading has 200, its body "peer: permission\n": HTTP-request-denied as the fork's
+		// RoundTripper maps it, a permission error. /proxy-post reads the same 502 at line 24, and /peer-down's body
+		// "permission\n" at line 32 where the reading has "ECONNREFUSED\n", the send denied before any dial (#1380).
 		AllowHTTP:       true,
 		InheritNetwork:  *inheritNetwork,
 		AllowNameLookup: *allowNameLookup,
-		Preopens:        append(dirs.preopens(), scratch.preopens()...),
+		// NEUTER, run: pass scratch.preopens() alone, so --dir's grant never reaches the component, and C4's
+		// TestC4BurroughsServeMatchesTheHostReading reads in each run the no-dir stdout,
+		// TestC4BurroughsServeWithNoDirAnswersNotExist's byte for byte: its first differing line is line 1, `GET /:
+		// status 500 "500 Internal Server Error"` where the reading has 200, and every route that reads /config
+		// answers "config: not-exist" (#1380).
+		Preopens: append(dirs.preopens(), scratch.preopens()...),
 	}.LoadComponent(wasm)
 	if err != nil {
 		return err

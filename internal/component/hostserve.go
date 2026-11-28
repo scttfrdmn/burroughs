@@ -145,7 +145,11 @@ func (s *HTTPServer) take() (*Instantiated, error) {
 // NEUTER, run: always close, and TestAServedInstanceIsReusedOnlyAfterItsTaskExits reads 0 instances after two
 // sequential requests, where it wants 1. Release at the answer instead of here, wasmtime's count to task.return, and
 // its hello sent while a held echo's task has returned and not exited enters that echo's instance and is answered
-// with the 500 page, its task ending before an answer: the guest fails there on Burroughs too.
+// with the 500 page, its task ending before an answer: the guest fails there on Burroughs too. Under that neuter
+// (made as a release in answered, and none in finish) C4's TestC4BurroughsServeMatchesTheHostReading passes, 9 of 9
+// and 3 of 3 under -race, **vacuous there**: its client sends each request only once it has read the last response
+// to its end, and whether any of its requests entered an instance whose task had answered and not exited was not
+// read. The pool witness above is that neuter's place, and failed under it again (#1380).
 func (s *HTTPServer) release(in *Instantiated, reuse bool) {
 	s.mu.Lock()
 	if _, ok := s.live[in]; !ok {

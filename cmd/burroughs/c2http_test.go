@@ -491,17 +491,29 @@ func buildC2Host(t *testing.T) (bin, goVersion string) {
 // that build also passes. It returns the binary and the toolchain's GOVERSION.
 func buildForkSourceForHost(t *testing.T, source, goMod, name string, flags ...string) (bin, goVersion string) {
 	t.Helper()
+	return buildForkModuleForHost(t, map[string]string{"main.go": source}, goMod, name, flags...)
+}
+
+// buildForkModuleForHost is buildForkSourceForHost for a witness of several committed sources (C4's p3svc, #1380):
+// files maps each file's name in the module, the name the fork's build of it gives it, to its committed source.
+func buildForkModuleForHost(
+	t *testing.T, files map[string]string, goMod, name string, flags ...string,
+) (bin, goVersion string) {
+	t.Helper()
 	goBin, err := exec.LookPath("go")
 	if err != nil {
 		t.Fatalf("no go on PATH, which go test puts its own GOROOT/bin at the head of: %v", err)
 	}
-	src, err := os.ReadFile(source)
-	if err != nil {
-		t.Fatalf("%s's source is missing (it is committed): %v", name, err)
-	}
 	dir := t.TempDir()
-	for fn, b := range map[string][]byte{"main.go": src, "go.mod": []byte(goMod)} {
-		if werr := os.WriteFile(filepath.Join(dir, fn), b, 0o600); werr != nil {
+	if werr := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o600); werr != nil {
+		t.Fatal(werr)
+	}
+	for fn, source := range files {
+		src, rerr := os.ReadFile(source)
+		if rerr != nil {
+			t.Fatalf("%s's source %s is missing (it is committed): %v", name, filepath.Base(source), rerr)
+		}
+		if werr := os.WriteFile(filepath.Join(dir, fn), src, 0o600); werr != nil {
 			t.Fatal(werr)
 		}
 	}
@@ -514,7 +526,7 @@ func buildForkSourceForHost(t *testing.T, source, goMod, name string, flags ...s
 	build := exec.Command(goBin, append(append([]string{"build", "-trimpath"}, flags...), "-o", bin, ".")...)
 	build.Dir, build.Env = dir, env
 	if out, berr := build.CombinedOutput(); berr != nil {
-		t.Fatalf("go build of %s failed: %v\n%s", filepath.Base(source), berr, out)
+		t.Fatalf("go build of %s failed: %v\n%s", name, berr, out)
 	}
 	ver := exec.Command(goBin, "env", "GOVERSION")
 	ver.Dir, ver.Env = dir, env
