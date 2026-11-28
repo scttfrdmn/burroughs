@@ -1,0 +1,94 @@
+# Committed readings for udp.wasm: wasi:sockets@0.3's whole udp-socket resource at the ABI (#1376 E3, ADR 0140).
+# Built:       wasm-tools parse udp.wat -o udp.wasm   (wasm-tools 1.258.0; validates --features all)
+#              sha256 c0ef453887082c8a816b4eb154a9b53666519b0ec1d42c6f7b6e4807895a25b5, 9838 bytes
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y -W component-model-more-async-builtins=y \
+#                -S p3=y -S inherit-network --invoke 'run(<row>)' udp.wasm
+#              (component-model-more-async-builtins for the async subtask.cancel; the `denied` row has no -S
+#              inherit-network)
+# Peer:        none; every socket is the row's own, on loopback.
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical. Taken
+#              2026-11-28, before the engine code.
+#
+# Each line is `<row>: <reading>`, and the test reads them by row. The row's number is its line's position, from 0,
+# counting row lines only, with `park` (40) a harness row that has no line. A reading of `trap` is a run that traps,
+# wasmtime's message given after it. Four bytes, byte 0 the low one; an operation's byte is 0 for ok and 0x80 | its
+# error-code case (0x80 access-denied, 0x82 invalid-argument, 0x85 invalid-state, 0x86 address-not-bindable, 0x87
+# address-in-use, 0x89 connection-refused, 0x8d datagram-too-large); a property's byte is 0 or 1. Each row's four
+# bytes are named in its comment in udp.wat.
+#
+# **Rows marked darwin below read the kernel, not the engine**: Burroughs asks the kernel as wasmtime does, so on
+# another kernel the answer is that kernel's, and the test compares these rows on darwin only (ADR 0140).
+bind-v4: 16842752
+bind-v6: 16842752
+fresh-getters: 16811397
+bind-refusals: 2189591808
+bind-more: 8881794
+sendto-v4: 16842752
+sendto-v6: 16842752
+connect-send: 0
+connect-filter: 0
+send-none: 33410
+send-mismatch: 33280
+send-implicit: 65536
+connect-implicit: 65536
+receive-unbound: 133
+disconnect: 2189788416
+disconnect-unconnected: 34181
+# darwin: its udp_disconnect resets the local address to the unspecified one, so byte 2 (still 127.0.0.1) is 0. By its
+# source Linux keeps an address a bind chose; unmeasured.
+disconnect-local: 16777216
+connect-refusals: 2189591170
+reconnect: 0
+empty: 16842752
+big: 16842752
+# The ipv6 pair (bytes 0 and 1) is refused by the host's 65535-byte bound, not the kernel's: darwin's kernel takes a
+# 65536-byte ipv6 datagram from a socket with a 1 MiB send buffer, measured with Go's net.
+sizes-64k: 2374864269
+# darwin: a datagram larger than the receive buffer is dropped, so the 4 bytes are what arrives. By its source Linux
+# queues the first datagram whatever its size; unmeasured.
+rcvbuf-small: 16777216
+# Not asked on Windows, where Go's net disables SIO_UDP_CONNRESET, so no ICMP error is ever surfaced.
+refused: 8978432
+hop-limit: 16810496
+# darwin: the defaults, 64 for ipv4 and 255 for ipv6 (IPV6_UNICAST_HOPS is -1, read as a u8). Other kernels unmeasured.
+hop-defaults: 4294918208
+hop-limit-v6: 2181103616
+rbuf: 33280
+sbuf: 33280
+buf-huge: 0
+options-carry: 0
+#
+# Burroughs', not wasmtime's, by ADR 0140's cancel: a cancel of a pending receive resolves at the cancel, so the async
+# subtask.cancel returns CANCELLED_BEFORE_RETURNED (4) itself. wasmtime 49.0.3 returns BLOCKED and then resolves the
+# subtask CANCELLED_BEFORE_RETURNED, and reads 5121 (0x00001401): STARTED; 0x10 | 4, the cancel blocked and then
+# resolved; the send ok; the next receive takes the datagram and B drops cleanly.
+cancel: 1025
+#
+blocked: 16777217
+sync-lowers: 16842752
+two-datagrams: 65536
+dial-v4: 0
+dial-v6: 0
+send-refusals: 2189591170
+broadcast: 32768
+# Read with no network flag: create of either family is access-denied.
+denied: 32896
+max-v4: 16813312
+max-v6: 16842752
+send-oob: trap: list pointer/length out of bounds of memory
+connect-any: 16842752
+disconnect-receive: 16777216
+queued-status: 16777472
+#
+# Burroughs', not wasmtime's, by ADR 0140's connected filter and the WIT's text ("receive will only return datagrams
+# sent from the provided remote-address"): a datagram from C queued before B's connect is not B's to receive, so B's
+# receive is A's datagram. wasmtime 49.0.3 returns C's, reading 16777216 (0x01000000): the sends ok; the receive ok;
+# not from A; from C. That reading is the row as committed, whose drain through D makes it 10 of 10; the row's first
+# draft, without the drain, read from-A 9 of 10 and from-C 1 of 10, a race with darwin's loopback queue.
+connect-after-arrival: 65536
+#
+# darwin: its default send buffer is net.inet.udp.maxdgram, 9216 bytes, so 9217 is datagram-too-large.
+kernel-maxdgram: 36096
+# darwin: after the disconnect the local address is the unspecified one with the bound port kept. By its source Linux
+# unbinds a port nobody chose; unmeasured.
+disconnect-any: 16842752
