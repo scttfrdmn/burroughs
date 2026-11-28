@@ -124,7 +124,7 @@ wasmtime 49.0.3 (`.oracle/wasmtime-49.0.3/wasmtime`, never the 50.0.1 on PATH), 
 3. **a datagram already held is the result, inline;**
 4. **otherwise the receive is pending:**
    - it is added to the socket's queue of receives, holds its lend of `self`, and counts in `sockPending`, as a waker for the park bound;
-   - if no reader is running, one is started, counted in the registry;
+   - if no reader is running, one is started, counted in the registry. **It starts as the impl's host window closes**, not inside it ([#1414](https://github.com/scttfrdmn/burroughs/issues/1414), below);
    - the receive returns STARTED, wasmtime's reading.
 
 The reader is the one receive site, authorised by this ADR in the census:
@@ -243,6 +243,25 @@ The PR's first CI run (head a6321106) failed `TestUDPMatchesWasmtime` on all thr
   - **The row now asks only what is invariant:** the send is refused, with `access-denied` or `remote-unreachable`, the two codes the WIT allows here (`access-denied` is possible from any function; `remote-unreachable` is send's EHOSTUNREACH and ENETUNREACH). Its byte 1 is 1 when the send's code is one of them.
   - `udp.wat` was reassembled. Every row was read again on wasmtime 49.0.3, 10 of 10, and only `broadcast`'s reading changed, to `0x00000100`.
   - **The `SO_BROADCAST` neuter's witness is unchanged:** `TestEveryUDPSocketHasNoBroadcast` reads the option on every bound socket, whatever the host's routes. On a host with a broadcast route the row fails under that neuter too, since the send is then ok. On a host without one the row cannot tell, and says so.
+
+### `queued-status` was flaky on Linux, and the reader now starts after the impl's window ([#1414](https://github.com/scttfrdmn/burroughs/issues/1414))
+
+After the merge, CI on PR #1412, which touches no UDP code, read `queued-status` as `0x01000200` (RETURNED) where the row asserts wasmtime's `0x01000100` (STARTED). It failed once on ubuntu-24.04 with `cm-threads` on, and once on ubuntu-24.04-arm under `-race` with it off.
+
+- **The cause, confirmed.** The async lower calls the impl between `enterHost` and `leaveHost`. A resolution that arrives while that window is open is queued, and `leaveHost` applies it before the lower reads whether the subtask has resolved, so the lower returns RETURNED. The receive impl started its reader inside the window. In that row the datagram is already in the kernel's queue, so the reader's first `ReadFrom` could return, and resolve, before the window closed.
+  - On main, the row read RETURNED in 1 of 400 plain runs in a Linux container (debian bookworm, linux/arm64).
+  - With the window widened by a debug sleep after the reader's start (not committed), it read RETURNED in 40 of 40 runs on darwin.
+- **The option taken is #1414's (a): the status is deterministic.**
+  - The reader is started from the window's queue (`asyncHandles.afterHost`), so it starts as `leaveHost` closes the window. Its first resolution then finds the window closed and waits for the run slot, which the caller holds until the lower has returned STARTED.
+  - Outside any window, as a test's direct call of the impl is, it starts at once.
+  - No lock is added, and the order is unchanged: `afterHost` takes `asyncHandles.mu` with no socket lock held, after the socket's lock is released.
+  - The sync lower brackets the impl the same way, so its wait starts with the reader started.
+- **Readings of `queued-status`, 200 runs in each gate state:**
+  - in the Linux container, 400 of 400 STARTED plain and 400 of 400 under `-race` (and 2000 of 2000 plain in a 1000-run burst);
+  - on darwin, 400 of 400 plain and 400 of 400 under `-race`.
+- **Neuter, run in the container: the reader started at once again.** The row read RETURNED in 35 of 400 runs under `-race` (14 with `cm-threads` off, 21 on), and in none of 2400 plain runs, a quieter container than CI's runners.
+- Every UDP test passes on darwin and in the container, plain and under `-race`.
+- **A residual, named:** in a free instance (`gate:cm-shared-memory`, ADR 0130) a resolution takes no slot, so one can still land between `leaveHost` and the lower's read. No row runs a free instance.
 
 ## Rollback
 
