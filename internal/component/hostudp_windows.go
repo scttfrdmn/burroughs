@@ -64,16 +64,16 @@ func osConnect(rc syscall.RawConn, ap netip.AddrPort) error {
 // osDisconnect dissolves the socket's association: Winsock's connect to the all-zero address of the socket's family,
 // which its documentation names as a disconnect for a datagram socket. Unmeasured: ADR 0140's slice used no Windows
 // host, and Windows is the unsupported lane.
-func osDisconnect(rc syscall.RawConn, fam int) error {
+func osDisconnect(rc syscall.RawConn, fam int) (dissolved bool, err error) {
 	var sa syscall.Sockaddr = &syscall.SockaddrInet4{}
 	if fam == familyIPv6 {
 		sa = &syscall.SockaddrInet6{}
 	}
 	var serr error
-	if err := rc.Control(func(fd uintptr) { serr = syscall.Connect(syscall.Handle(fd), sa) }); err != nil {
-		return err
+	if cerr := rc.Control(func(fd uintptr) { serr = syscall.Connect(syscall.Handle(fd), sa) }); cerr != nil {
+		return false, cerr
 	}
-	return serr
+	return serr == nil, serr
 }
 
 // osLocalAddr is the socket's getsockname.

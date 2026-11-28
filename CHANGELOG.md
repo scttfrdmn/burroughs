@@ -36,7 +36,9 @@ says what it now requires and what it gives up.
   - **The OS socket is made at the bind,** explicit or implicit (the first `connect` or `send`). An option set before
     the bind is recorded and applied then, and one read before it comes from a probe socket. `connect` is the OS's
     connect, so the kernel filters what arrives, surfaces ICMP's `connection-refused`, and picks the local address.
-    `disconnect` is a connect to `AF_UNSPEC`. `SO_BROADCAST`, which Go's `net` sets, is cleared.
+    `disconnect` is a connect to `AF_UNSPEC`, and a disconnected socket keeps its port on every kernel: Linux's
+    disconnect unbinds a port the kernel chose, so there the socket is bound to it again. `SO_BROADCAST`, which Go's
+    `net` sets, is cleared.
   - **send resolves inline.** A datagram over 65535 bytes is `datagram-too-large` before the kernel is asked, wasmtime's
     bound, and a list past the end of memory traps at the lift.
   - **receive is served by one reader per socket,** started on demand. It serves the pending receives in order. It
@@ -45,7 +47,9 @@ says what it now requires and what it gives up.
     waits its reader out.
   - **Witnesses:** every one of `udp.wasm`'s 49 rows passes with `gate:cm-threads` off and on, plain and under `-race`
     (`udp.reading`, 10 of 10 per row). 47 are wasmtime 49.0.3's readings, the ungranted `create` among them, and two
-    are ADR 0140's departures. Five rows read darwin's kernel, are marked so, and are compared on darwin only.
+    are ADR 0140's departures. Four rows read darwin's kernel, are marked so, and are compared on darwin only. The other
+    45 also pass on Linux. The `broadcast` row asks only that the send is refused, with `access-denied` or
+    `remote-unreachable`, since which one a host answers depends on its routes.
     `p3udp`, a Rust std `UdpSocket` guest built offline, matches wasmtime's granted and no-flag readings
     (`p3udp.reading`, `p3udp-denied.reading`), and so do Run, LoadComponent and `burroughs run --inherit-network`. Go's
     `ListenUDP`, `DialUDP`, `ReadFrom`, `WriteTo`, `Read`, `Write` and `LocalAddr` are the `dial-v4` and `dial-v6` rows'
@@ -56,7 +60,7 @@ says what it now requires and what it gives up.
     - a connected socket does not return a datagram from another socket that was queued before the connect, where
       wasmtime does. That row is the WIT's text.
   - **Named limits:** a send blocks its agent if the kernel cannot take the datagram at once. On Windows, Go's `net`
-    turns ICMP errors off, so a receive after a send to a closed port waits. Linux's and Windows' readings are
+    turns ICMP errors off, so a receive after a send to a closed port waits. wasmtime's Linux and Windows readings are
     unmeasured, and disconnect is `not-supported` on the BSDs but darwin.
 
 - **A component serves HTTP: `Component.Handler()` and `burroughs serve`, `wasi:http@0.3`'s incoming half**

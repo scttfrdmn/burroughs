@@ -82,7 +82,9 @@ var udpRows = []udpRow{
 	{name: "queued-status"},
 	{name: "connect-after-arrival"},
 	{name: "kernel-maxdgram", darwin: true},
-	{name: "disconnect-any", darwin: true},
+	// Portable since the Linux disconnect binds a port its kernel dropped again (hostudp_disconnect_linux.go): its first
+	// draft was darwin's, before CI's first Linux run.
+	{name: "disconnect-any"},
 }
 
 // udpRowIndex is a row's number by its name.

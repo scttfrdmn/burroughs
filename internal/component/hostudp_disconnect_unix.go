@@ -10,5 +10,7 @@ import (
 )
 
 // osDisconnect is `not-supported` on a POSIX system this engine has no raw AF_UNSPEC connect for (ADR 0140): the BSDs
-// but darwin, linux/386, and the rest. udpErrorLabel maps errors.ErrUnsupported to it.
-func osDisconnect(syscall.RawConn, int) error { return errors.ErrUnsupported }
+// but darwin, linux/386, and the rest. udpErrorLabel maps errors.ErrUnsupported to it, and the association stands.
+func osDisconnect(syscall.RawConn, int) (dissolved bool, err error) {
+	return false, errors.ErrUnsupported
+}

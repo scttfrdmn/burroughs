@@ -736,13 +736,18 @@
         (call $v6 (i32.const 600) (i32.const 0xffff) (i32.const 0x7f00) (i32.const 1) (call $port (i32.const 432)))
         (return (call $pack (local.get $r0) (local.get $r1) (local.get $r2)
           (call $send (call $bound6 (i32.const 464)) (i32.const 0x20000) (i32.const 5) (i32.const 600))))))
-      ;; 38 broadcast: an ipv4 socket bound to 0.0.0.0:0 sends to 255.255.255.255:9, which no WASI option permits.
+      ;; 38 broadcast: an ipv4 socket bound to 0.0.0.0:0 sends to 255.255.255.255:9, which no WASI option permits; is the
+      ;; send refused with access-denied (0x80, a kernel's EACCES for a socket without SO_BROADCAST) or
+      ;; remote-unreachable (0x88, a host with no route for the broadcast address). Which of the two a host answers is
+      ;; its network's, so the byte asks only that the send was refused with one of them.
       (if (i32.eq (local.get $row) (i32.const 38)) (then
         (local.set $a (call $create (i32.const 0)))
         (call $v4 (i32.const 600) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
         (local.set $r0 (call $bindp (local.get $a) (i32.const 600)))
         (call $v4 (i32.const 600) (i32.const 255) (i32.const 255) (i32.const 255) (i32.const 255) (i32.const 9))
-        (return (call $pack (local.get $r0) (call $send (local.get $a) (i32.const 0x20000) (i32.const 5) (i32.const 600))
+        (local.set $r1 (call $send (local.get $a) (i32.const 0x20000) (i32.const 5) (i32.const 600)))
+        (return (call $pack (local.get $r0)
+          (i32.or (i32.eq (local.get $r1) (i32.const 0x80)) (i32.eq (local.get $r1) (i32.const 0x88)))
           (i32.const 0) (i32.const 0)))))
       ;; 39 denied: create of an ipv4 and of an ipv6 socket (read with no network flag).
       (if (i32.eq (local.get $row) (i32.const 39)) (then
@@ -833,7 +838,8 @@
         (return (call $pack (call $send (local.get $a) (i32.const 0x20000) (i32.const 9216) (i32.const 432))
           (call $send (local.get $a) (i32.const 0x20000) (i32.const 9217) (i32.const 432)) (i32.const 0) (i32.const 0)))))
       ;; 49 disconnect-any: A bound to 0.0.0.0:0, connected to B, disconnects; its local address; it is 0.0.0.0; its port
-      ;; is the bound one. darwin keeps the port; a kernel that unbinds a port nobody chose resets it.
+      ;; is the bound one. darwin's kernel keeps the port; Linux's unbinds a port it chose, and an engine that keeps the
+      ;; WIT's bound state binds it again.
       (if (i32.eq (local.get $row) (i32.const 49)) (then
         (local.set $a (call $create (i32.const 0)))
         (call $v4 (i32.const 600) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))

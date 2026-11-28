@@ -1,8 +1,10 @@
 # Committed readings for udp.wasm: wasi:sockets@0.3's whole udp-socket resource at the ABI (#1376 E3, ADR 0140).
 # Built:       wasm-tools parse udp.wat -o udp.wasm   (wasm-tools 1.258.0; validates --features all)
-#              sha256 cccccee429688a20378725ded1251b75e1e49fae30c4518377efd2ade749029d, 9838 bytes. It replaces the
-#              first assembly (c0ef4538…a25b5), whose refused row bound A after giving C's port back; every row was
-#              read again on this one, 10 of 10, with the same readings.
+#              sha256 95254f03acab2c94db0d6eaf410a50a8ac35dcb22ad061dba326e07e0dc83b91, 9853 bytes. It replaces two
+#              earlier assemblies: the first (c0ef4538…a25b5), whose refused row bound A after giving C's port back, and
+#              the second (cccccee4…9029d), whose broadcast row reported the send's own code, which CI's macos-15
+#              runner answered differently. Every row was read again on this one, 10 of 10, and only broadcast's
+#              reading changed, to the invariant its comment below names.
 # Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y -W component-model-more-async-builtins=y \
 #                -S p3=y -S inherit-network --invoke 'run(<row>)' udp.wasm
 #              (component-model-more-async-builtins for the async subtask.cancel; the `denied` row has no -S
@@ -36,8 +38,9 @@ connect-implicit: 65536
 receive-unbound: 133
 disconnect: 2189788416
 disconnect-unconnected: 34181
-# darwin: its udp_disconnect resets the local address to the unspecified one, so byte 2 (still 127.0.0.1) is 0. By its
-# source Linux keeps an address a bind chose; unmeasured.
+# darwin: its udp_disconnect resets the local address to the unspecified one, so byte 2 (still 127.0.0.1) is 0. Linux
+# keeps an address a bind chose: a native Go probe in a Linux container read 127.0.0.1 after the disconnect, and
+# Burroughs on Linux reads 0x01010000.
 disconnect-local: 16777216
 connect-refusals: 2189591170
 reconnect: 0
@@ -46,13 +49,14 @@ big: 16842752
 # The ipv6 pair (bytes 0 and 1) is refused by the host's 65535-byte bound, not the kernel's: darwin's kernel takes a
 # 65536-byte ipv6 datagram from a socket with a 1 MiB send buffer, measured with Go's net.
 sizes-64k: 2374864269
-# darwin: a datagram larger than the receive buffer is dropped, so the 4 bytes are what arrives. By its source Linux
-# queues the first datagram whatever its size; unmeasured.
+# darwin: a datagram larger than the receive buffer is dropped, so the 4 bytes are what arrives. Burroughs on Linux, in
+# a container, reads 0x00000000: Linux queues the first datagram whatever its size, so the 8192 bytes arrive.
 rcvbuf-small: 16777216
 # Not asked on Windows, where Go's net disables SIO_UDP_CONNRESET, so no ICMP error is ever surfaced.
 refused: 8978432
 hop-limit: 16810496
-# darwin: the defaults, 64 for ipv4 and 255 for ipv6 (IPV6_UNICAST_HOPS is -1, read as a u8). Other kernels unmeasured.
+# darwin: the defaults, 64 for ipv4 and 255 for ipv6 (IPV6_UNICAST_HOPS is -1, read as a u8). Burroughs on Linux, in a
+# container, reads 0x40404040: 64 for both.
 hop-defaults: 4294918208
 hop-limit-v6: 2181103616
 rbuf: 33280
@@ -72,7 +76,10 @@ two-datagrams: 65536
 dial-v4: 0
 dial-v6: 0
 send-refusals: 2189591170
-broadcast: 32768
+# The send to 255.255.255.255 is refused with access-denied or remote-unreachable, byte 1 (0x00000100). This machine
+# answers access-denied, its kernel's EACCES for a socket without SO_BROADCAST, and read 0x00008000 when the byte was the
+# code itself; CI's macos-15 runner answered remote-unreachable (0x88), a host with no route for the broadcast address.
+broadcast: 256
 # Read with no network flag: create of either family is access-denied.
 denied: 32896
 max-v4: 16813312
@@ -89,8 +96,10 @@ queued-status: 16777472
 # draft, without the drain, read from-A 9 of 10 and from-C 1 of 10, a race with darwin's loopback queue.
 connect-after-arrival: 65536
 #
-# darwin: its default send buffer is net.inet.udp.maxdgram, 9216 bytes, so 9217 is datagram-too-large.
+# darwin: its default send buffer is net.inet.udp.maxdgram, 9216 bytes, so 9217 is datagram-too-large. Burroughs on
+# Linux, in a container, reads 0x00000000: its default send buffer takes both.
 kernel-maxdgram: 36096
-# darwin: after the disconnect the local address is the unspecified one with the bound port kept. By its source Linux
-# unbinds a port nobody chose; unmeasured.
+# After the disconnect the local address is the unspecified one with the bound port kept: darwin's kernel keeps the
+# port, and Linux's, which unbinds a port it chose (measured natively in a Linux container), has it bound again by the
+# engine (ADR 0140). So the row is asked on every kernel, against darwin's wasmtime reading.
 disconnect-any: 16842752

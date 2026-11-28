@@ -101,6 +101,7 @@ wasmtime 49.0.3 (`.oracle/wasmtime-49.0.3/wasmtime`, never the 50.0.1 on PATH), 
   - **on darwin and Linux, a raw `SYS_CONNECT`** (`osDisconnect`, the package's only use of `unsafe`), with darwin's `EAFNOSUPPORT` and `EINVAL` read as success (darwin dissolves the association before it refuses the address, measured natively with Go's `net`);
   - **on Windows, a `connect` to the all-zero address**, which Winsock's documentation names as a disconnect (unmeasured: no Windows host was used);
   - elsewhere, `not-supported`.
+  - **A disconnected socket keeps its port on every kernel.** Linux's disconnect unbinds a port the kernel chose (a bind that asked for port 0, or an implicit bind), so on Linux a disconnect that leaves the socket at port 0 binds it again, to the address the kernel left and the port it had. That is the WIT's bound state, which a disconnect does not leave, and darwin's kernel's own behaviour. This was added after CI's first Linux run (below). A port another socket takes in the window between is the bind's error, with the association already dissolved.
 - **The local address is the kernel's `getsockname`,** read at the call, because a connect and a disconnect move it. The remote address is the recorded peer, and `invalid-state` when the socket is not connected.
 
 ### send
@@ -164,11 +165,11 @@ The reader is the one receive site, authorised by this ADR in the census:
 - **Two named departures from wasmtime 49.0.3,** each in a fixture row of its own, with both readings recorded beside the row:
   1. an async cancel of a pending receive resolves at the cancel, where wasmtime's returns BLOCKED first (`cancel`);
   2. a connected socket does not return a datagram from another socket that was queued before the connect, where wasmtime does (`connect-after-arrival`). That row is the WIT's text.
-- **Rows that read the kernel and not the engine** are darwin's, and each is marked so in the reading:
-  - disconnect's local address;
-  - a receive buffer too small for a datagram (darwin drops it; Linux, by its source and unmeasured, queues the first);
-  - the hop limit's defaults;
-  - the 9216-byte send buffer.
+- **Rows that read the kernel and not the engine** are darwin's, and each is marked so in the reading. There are four, with what Burroughs reads on Linux in a container beside each:
+  - disconnect's local address after an explicit bind to 127.0.0.1 (`disconnect-local`: darwin resets it to the unspecified address, and Linux keeps it, `0x01010000`);
+  - a receive buffer too small for a datagram (`rcvbuf-small`: darwin drops it, and Linux queues the first, `0x00000000`);
+  - the hop limit's defaults (`hop-defaults`: darwin's IPv6 −1 reads 255, and Linux reads 64 for both, `0x40404040`);
+  - the 9216-byte send buffer (`kernel-maxdgram`: Linux's default takes both, `0x00000000`).
 
   On another kernel Burroughs asks that kernel, as wasmtime would, and the test does not compare those rows.
 - **Named limits:**
@@ -176,7 +177,7 @@ The reader is the one receive site, authorised by this ADR in the census:
   - **A received datagram is lowered element by element,** through the codec's general list path, so a 65507-byte datagram is 65507 values.
   - **On Windows, Go's `net` disables `SIO_UDP_CONNRESET`,** so an ICMP error is never surfaced, and a receive after a send to a closed port waits.
   - **Unmeasured:**
-    - Linux's and Windows' readings;
+    - wasmtime's readings on Linux and Windows, and Burroughs' on Windows. Whether wasmtime on Linux keeps a disconnected socket's kernel-chosen port, as Burroughs now does, is among them;
     - whether wasmtime on Linux halves the buffer sizes it reads (Burroughs reports the kernel's);
     - a datagram longer than 65535 bytes, which only an IPv6 jumbogram could carry (the reader's buffer truncates it);
     - multicast;
@@ -188,7 +189,7 @@ On darwin/arm64, in the worktree of #1376's branch. The readings were committed 
 
 - **`TestUDPMatchesWasmtime`** (`internal/component/hostudp_test.go`, over `testdata/udp.wat`): all 49 read rows, with `gate:cm-threads` off and on, plain and under `-race`.
   - 47 are wasmtime 49.0.3's readings, the `denied` row's no-flag reading among them. `cancel` and `connect-after-arrival` are this ADR's departures, and `connect-after-arrival`'s value is the WIT's text.
-  - The five darwin rows are asked on darwin only, and `refused` is not asked on Windows.
+  - The four darwin rows are asked on darwin only, and `refused` is not asked on Windows. (There were five until CI's first Linux run: `disconnect-any` is portable since the Linux rebind below.)
   - No socket goroutine survived any row's Close.
   - **The first run of the rows passed every row.**
 - **`TestP3UdpMatchesWasmtime`:** both readings, in both gate states.
@@ -214,7 +215,7 @@ On darwin/arm64, in the worktree of #1376's branch. The readings were committed 
   - **disconnect, the live local address, send's two state refusals, and the remote-address refusals** each fail rows of their own.
   - **`SO_BROADCAST`'s clear** fails its unit witness. The `broadcast` row was deliberately not run under that neuter, since it would put a datagram for 255.255.255.255 on the network.
   - **Vacuous, and said so at their sites:**
-    - connect's disconnect before a reconnect, since darwin's connect replaces the association itself;
+    - connect's disconnect before a reconnect, on darwin, since darwin's connect replaces the association itself (on Linux, with the rebind, it is what keeps a kernel-chosen port's reconnect consistent with a plain disconnect's);
     - the reader's copy of a datagram out of its buffer, by construction;
     - the IPv4-mapped refusal of a remote address, which darwin's kernel makes itself;
     - `options-carry`'s receive-buffer half.
@@ -223,6 +224,25 @@ On darwin/arm64, in the worktree of #1376's branch. The readings were committed 
   - the row harness closed a row's instance only when the row passed, so a row that failed its guard left its reader to fail every later row's goroutine check;
   - the grant test's bind asked for port 9, which darwin's kernel answered `access-denied` itself, so the bind's assertion held under its neuter. It asks for port 0.
 - **A residual, named rather than repaired:** the `refused` row's closed port, like p3udp's and like TCP's closed-port rows, is a port the test bound and gave back. Another process on the host can take it in between, and the row then waits at its guard.
+
+### CI's first run, on PR #1411, and what it changed
+
+The PR's first CI run (head a6321106) failed `TestUDPMatchesWasmtime` on all three build legs. Each failure was reproduced or explained before anything changed.
+
+- **Linux (ubuntu-24.04 and ubuntu-24.04-arm), both gate states:** `reconnect` read `0x01000000`, and `disconnect-receive` waited at its hang guard. Both reproduced in a Linux container (debian bookworm, linux/arm64, kernel 7.0.14-linuxkit) from a cross-compiled test binary.
+  - **The cause is Linux's kernel, not the AF_UNSPEC sockaddr.** A native Go probe, written independently of this engine and run in the same container, showed four things:
+    - the AF_UNSPEC connect succeeds on Linux;
+    - a socket bound to 127.0.0.1:0 or 0.0.0.0:0 then reads port 0 from `getsockname`, and a datagram sent to its old port is lost;
+    - a socket bound to an explicit port (47123) keeps it;
+    - a bind to the old port after the disconnect succeeds and receives.
+
+    The same probe on darwin keeps the port in every case, and resets the address to the unspecified one. So `disconnect-receive` lost its port at the disconnect. `reconnect` lost it at connect's disconnect-first, which the probe shows Linux does not need: a reconnect with no disconnect between keeps the port on both kernels.
+  - **The repair is in the engine** (the disconnect bullet of the choice above). On Linux, a disconnect that leaves the socket portless binds it again to its port. In the container every portable row then passes in both gate states: 45 rows, since the four darwin rows are not asked. `disconnect-any`, which was darwin-only because Linux unbinds the port, is portable now, and reads darwin's wasmtime value on Linux. The rebind's neuter, run in the container, brings back both CI failures and fails `disconnect-any` (`0x00010000`). It is vacuous on darwin.
+- **macos-15 runner, both gate states:** `broadcast` read `0x00008800`, where this machine and wasmtime read `0x00008000`.
+  - The runner answered the send to 255.255.255.255 `remote-unreachable`, which is EHOSTUNREACH or ENETUNREACH: its kernel found no route for the broadcast address. That is inferred from the code; the runner's routes were not read. This machine's kernel finds one and answers `access-denied`, its EACCES for a socket without `SO_BROADCAST`. Which one a host gives is its network's.
+  - **The row now asks only what is invariant:** the send is refused, with `access-denied` or `remote-unreachable`, the two codes the WIT allows here (`access-denied` is possible from any function; `remote-unreachable` is send's EHOSTUNREACH and ENETUNREACH). Its byte 1 is 1 when the send's code is one of them.
+  - `udp.wat` was reassembled. Every row was read again on wasmtime 49.0.3, 10 of 10, and only `broadcast`'s reading changed, to `0x00000100`.
+  - **The `SO_BROADCAST` neuter's witness is unchanged:** `TestEveryUDPSocketHasNoBroadcast` reads the option on every bound socket, whatever the host's routes. On a host with a broadcast route the row fails under that neuter too, since the send is then ok. On a host without one the row cannot tell, and says so.
 
 ## Rollback
 

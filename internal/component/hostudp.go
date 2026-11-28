@@ -526,12 +526,16 @@ func (h *Host) udpConnect(_ *hostResources, c *interp.CanonCaller, self *udpSock
 		label = self.boundLocked()
 		// NEUTER, run: skip this disconnect, and TestUDPMatchesWasmtime passes, its reconnect row included: **vacuous on
 		// darwin**, whose connect replaces a datagram socket's association by itself, as that row shows. It is the WIT's
-		// implementors' note, for a kernel that requires the disconnect, and no kernel measured here does.
+		// implementors' note, for a kernel that requires the disconnect, and no kernel measured here does (a native probe
+		// in a Linux container reconnected with no disconnect between, keeping the port). On Linux this disconnect is
+		// what unbinds a port the kernel chose, which osDisconnect binds again.
 		if label == "" && self.connected {
-			if derr := osDisconnect(self.rc, self.family); derr != nil {
-				label = udpErrorLabel(udpOpConnect, derr)
-			} else {
+			dissolved, derr := osDisconnect(self.rc, self.family)
+			if dissolved {
 				self.connected, self.remote = false, netip.AddrPort{}
+			}
+			if derr != nil {
+				label = udpErrorLabel(udpOpConnect, derr)
 			}
 		}
 		if label == "" {
@@ -576,10 +580,14 @@ func (h *Host) udpDisconnect(_ *hostResources, c *interp.CanonCaller, self *udpS
 	case !self.connected || self.closed:
 		label = "invalid-state"
 	default:
-		if err := osDisconnect(self.rc, self.family); err != nil {
-			label = udpErrorLabel(udpOpConnect, err)
-		} else {
+		// A disconnect that dissolved the association and then failed to keep the port (Linux's rebind, when another
+		// socket took the port in the window) leaves the socket unconnected and reports the bind's error.
+		dissolved, err := osDisconnect(self.rc, self.family)
+		if dissolved {
 			self.connected, self.remote = false, netip.AddrPort{}
+		}
+		if err != nil {
+			label = udpErrorLabel(udpOpConnect, err)
 		}
 	}
 	self.mu.Unlock()
