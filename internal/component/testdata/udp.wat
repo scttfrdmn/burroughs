@@ -572,10 +572,12 @@
         (drop (call $send (local.get $a) (i32.const 0x30000) (i32.const 4) (i32.const 432)))
         (local.set $r2 (call $recv (local.get $b)))
         (return (call $pack (local.get $r0) (local.get $r1) (local.get $r2) (call $got (i32.const 0x30000) (i32.const 4))))))
-      ;; 23 refused: C bound and dropped, its port now closed; A connects to it, sends, and receives.
+      ;; 23 refused: A bound; C bound and dropped, its port now closed; A connects to it, sends, and receives. A is bound
+      ;; first, so the kernel cannot hand it the port C gave back, which would have A connect to itself and receive its
+      ;; own datagram: the first draft's order, which a -race run of Burroughs' package caught once.
       (if (i32.eq (local.get $row) (i32.const 23)) (then
-        (call $drop-low (call $bound4 (i32.const 464)))
         (local.set $a (call $bound4 (i32.const 400)))
+        (call $drop-low (call $bound4 (i32.const 464)))
         (return (call $pack (call $connectp (local.get $a) (i32.const 464))
           (call $send (local.get $a) (i32.const 0x20000) (i32.const 5) (i32.const 0))
           (call $recv (local.get $a)) (i32.const 0)))))

@@ -101,11 +101,12 @@ fn main() {
         }
     }
 
-    // A port nobody holds: the datagram is refused, and the refusal is the next receive's.
+    // A port nobody holds: the datagram is refused, and the refusal is the next receive's. The sender is bound before
+    // the port is given back, so the kernel cannot hand the sender that port and have it connect to itself.
+    let e = UdpSocket::bind(SocketAddr::new(lo4, 0)).unwrap();
     let gone = UdpSocket::bind(SocketAddr::new(lo4, 0)).unwrap();
     let port = gone.local_addr().unwrap().port();
     drop(gone);
-    let e = UdpSocket::bind(SocketAddr::new(lo4, 0)).unwrap();
     e.connect(SocketAddr::new(lo4, port)).unwrap();
     let _ = e.send(b"anyone?");
     match e.recv(&mut buf) {
