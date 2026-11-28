@@ -1,0 +1,24 @@
+//go:build !wasip3
+
+package main
+
+import (
+	"flag"
+	"fmt"
+	"net/http"
+	"os"
+)
+
+// main serves the handlers with stock Go's server: http.ListenAndServe on -addr, the configuration
+// directory -config.
+func main() {
+	addr := flag.String("addr", "127.0.0.1:8080", "the address to listen on, HOST:PORT")
+	flag.StringVar(&configDir, "config", "", "the configuration directory, which holds app.conf")
+	flag.Parse()
+	if configDir == "" || flag.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: p3svc -config DIR [-addr HOST:PORT]")
+		os.Exit(2)
+	}
+	fmt.Fprintln(os.Stderr, http.ListenAndServe(*addr, newMux()))
+	os.Exit(1)
+}

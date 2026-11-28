@@ -1,0 +1,14 @@
+//go:build wasip3
+
+package main
+
+import "net/http/wasihttp"
+
+// On the fork's GOOS=wasip3 the handlers are the reactor's: a reactor never runs main, so the mux is
+// registered from init, and the configuration directory is the preopen the host grants as /config.
+func init() {
+	configDir = "/config"
+	wasihttp.Handle(newMux())
+}
+
+func main() {}
